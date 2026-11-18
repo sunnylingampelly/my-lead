@@ -1,0 +1,105 @@
+# Production-style stack: no bind mounts, built images, nginx serving the frontend.
+# Usage: cp .env.example .env.production (fill it in), then
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+# See docs/DEPLOYMENT.md.
+name: signalcraft-prod
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: ../infrastructure/docker/backend.Dockerfile
+  env_file: .env.production
+  environment:
+    ENVIRONMENT: production
+    DATABASE_URL: mysql+pymysql://${MYSQL_USER:-signalcraft}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-signalcraft}?charset=utf8mb4
+    REDIS_URL: redis://redis:6379/0
+    CELERY_TASK_ALWAYS_EAGER: "false"
+    DEV_MAILBOX_ENABLED: "false"
+    LOCAL_STORAGE_PATH: /app/var/storage
+  volumes:
+    - backend_var:/app/var
+  restart: unless-stopped
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-signalcraft}
+      MYSQL_USER: ${MYSQL_USER:-signalcraft}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infrastructure/docker/mysql/my.cnf:/etc/mysql/conf.d/signalcraft.cnf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *backend
+    command: sh -c "python wait_for_db.py && alembic upgrade head"
+    restart: "no"
+
+  backend:
+    <<: *backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*" --workers 2
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker --loglevel=INFO -Q default,email,campaigns,imports,webhooks --concurrency=4
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *backend
+    # Exactly one scheduler: it enqueues due campaigns, automation ticks and usage settlement.
+    command: celery -A app.workers.celery_app beat --loglevel=INFO --schedule /app/var/celerybeat-schedule
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/frontend.Dockerfile
+      target: prod
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_var:

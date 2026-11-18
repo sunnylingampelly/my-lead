@@ -1,0 +1,111 @@
+# Development stack. Production differences are described in docs/DEPLOYMENT.md.
+name: signalcraft
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: ../infrastructure/docker/backend.Dockerfile
+    args:
+      INSTALL_DEV: "true"
+  env_file: .env
+  environment:
+    DATABASE_URL: mysql+pymysql://${MYSQL_USER:-signalcraft}:${MYSQL_PASSWORD:-signalcraft}@mysql:3306/${MYSQL_DATABASE:-signalcraft}?charset=utf8mb4
+    REDIS_URL: redis://redis:6379/0
+    CELERY_TASK_ALWAYS_EAGER: "false"
+    SIMULATION_MAILBOX_PATH: /app/var/mailbox
+    LOCAL_STORAGE_PATH: /app/var/storage
+  volumes:
+    - ./backend:/app
+    - backend_var:/app/var
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-signalcraft}
+      MYSQL_USER: ${MYSQL_USER:-signalcraft}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-signalcraft}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infrastructure/docker/mysql/my.cnf:/etc/mysql/conf.d/signalcraft.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *backend
+    command: sh -c "python wait_for_db.py && alembic upgrade head"
+    restart: "no"
+
+  backend:
+    <<: *backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker --loglevel=INFO -Q default,email,campaigns,imports,webhooks --concurrency=4
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *backend
+    command: celery -A app.workers.celery_app beat --loglevel=INFO --schedule /app/var/celerybeat-schedule
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/frontend.Dockerfile
+      target: dev
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_var:

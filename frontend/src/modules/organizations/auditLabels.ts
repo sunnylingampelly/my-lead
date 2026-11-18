@@ -1,0 +1,28 @@
+const LABELS: Record<string, string> = {
+  'user.registered': 'created an account',
+  'user.email_verified': 'verified their email',
+  'user.login': 'signed in',
+  'user.login_failed': 'had a failed sign-in attempt',
+  'user.password_changed': 'changed their password',
+  'user.password_reset': 'reset their password',
+  'user.password_reset_requested': 'requested a password reset',
+  'user.profile_updated': 'updated their profile',
+  'user.refresh_token_reuse': 'triggered a session security reset',
+  'organization.created': 'created the organization',
+  'organization.updated': 'updated organization details',
+  'member.updated': 'updated a member',
+  'member.removed': 'removed a member',
+  'member.left': 'left the organization',
+  'invitation.created': 'sent an invitation',
+  'invitation.resent': 'resent an invitation',
+  'invitation.revoked': 'revoked an invitation',
+  'invitation.accepted': 'joined via invitation',
+  'application.created': 'created an application',
+  'application.updated': 'updated an application',
+  'application.deleted': 'deleted an application',
+  'application.settings_updated': 'changed application settings',
+  'application.member_added': 'granted application access',
+  'application.member_removed': 'removed application access',
+}
+
+export const describeAction = (action: string) => LABELS[action] ?? action.replace(/[._]/g, ' ')

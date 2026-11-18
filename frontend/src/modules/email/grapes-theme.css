@@ -1,0 +1,55 @@
+/* Align the GrapesJS editor chrome with the app's design tokens (light and dark). */
+.sc-grapes .gjs-one-bg {
+  background-color: hsl(var(--card));
+}
+.sc-grapes .gjs-two-color {
+  color: hsl(var(--foreground));
+}
+.sc-grapes .gjs-three-bg {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.sc-grapes .gjs-four-color,
+.sc-grapes .gjs-four-color-h:hover {
+  color: hsl(var(--primary));
+}
+.sc-grapes .gjs-pn-panel,
+.sc-grapes .gjs-blocks-c,
+.sc-grapes .gjs-sm-sector,
+.sc-grapes .gjs-layer {
+  border-color: hsl(var(--border));
+}
+.sc-grapes .gjs-block {
+  border-radius: 8px;
+  border: 1px solid hsl(var(--border));
+  box-shadow: none;
+  min-height: 72px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.sc-grapes .gjs-block:hover {
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary));
+  transform: translateY(-1px);
+}
+.sc-grapes .gjs-cv-canvas {
+  background-color: hsl(var(--muted));
+}
+.sc-grapes .gjs-field,
+.sc-grapes .gjs-input-holder input,
+.sc-grapes .gjs-select select {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border-radius: 6px;
+}
+.sc-grapes .gjs-pn-btn {
+  border-radius: 6px;
+}
+.sc-grapes .gjs-pn-btn.gjs-pn-active {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+  box-shadow: none;
+}
+.sc-grapes,
+.sc-grapes * {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}

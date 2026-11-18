@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 95%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 243 100% 97%;
+    --accent-foreground: 243 75% 45%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 35 92% 45%;
+    --warning-foreground: 0 0% 100%;
+    --success-soft: 152 76% 96%;
+    --success-strong: 156 72% 26%;
+    --success-border: 152 60% 82%;
+    --warning-soft: 45 100% 95%;
+    --warning-strong: 28 80% 30%;
+    --warning-border: 43 90% 78%;
+    --danger-soft: 0 86% 97%;
+    --danger-strong: 0 70% 38%;
+    --danger-border: 0 80% 88%;
+    --border: 220 13% 90%;
+    --input: 220 13% 87%;
+    --ring: 243 75% 59%;
+    --radius: 0.625rem;
+
+    --sidebar: 224 32% 9%;
+    --sidebar-foreground: 220 14% 88%;
+    --sidebar-muted: 220 10% 58%;
+    --sidebar-accent: 224 24% 16%;
+    --sidebar-border: 224 20% 16%;
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 225 25% 7%;
+    --foreground: 220 15% 92%;
+    --card: 225 22% 10%;
+    --card-foreground: 220 15% 92%;
+    --popover: 225 22% 11%;
+    --popover-foreground: 220 15% 92%;
+    --primary: 243 88% 70%;
+    --primary-foreground: 230 40% 10%;
+    --secondary: 225 18% 15%;
+    --secondary-foreground: 220 15% 92%;
+    --muted: 225 18% 14%;
+    --muted-foreground: 220 10% 62%;
+    --accent: 243 45% 20%;
+    --accent-foreground: 243 95% 84%;
+    --destructive: 0 72% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 55% 48%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 56%;
+    --warning-foreground: 0 0% 10%;
+    --success-soft: 155 45% 14%;
+    --success-strong: 150 65% 68%;
+    --success-border: 155 40% 26%;
+    --warning-soft: 35 55% 14%;
+    --warning-strong: 42 95% 70%;
+    --warning-border: 35 50% 30%;
+    --danger-soft: 0 45% 15%;
+    --danger-strong: 0 90% 76%;
+    --danger-border: 0 45% 30%;
+    --border: 225 16% 18%;
+    --input: 225 14% 24%;
+    --ring: 243 88% 70%;
+
+    --sidebar: 228 30% 5%;
+    --sidebar-foreground: 220 15% 88%;
+    --sidebar-muted: 220 10% 56%;
+    --sidebar-accent: 228 22% 13%;
+    --sidebar-border: 228 20% 12%;
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer base {
+  .dark .shadow-card {
+    box-shadow: 0 1px 0 0 hsl(0 0% 100% / 0.03) inset, 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  }
+  .dark .shadow-pop {
+    box-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 0 0 1px hsl(0 0% 100% / 0.06);
+  }
+  ::selection {
+    background: hsl(var(--primary) / 0.25);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 1ms !important;
+      transition-duration: 1ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Sidebar: no gutter, thumb appears only while hovering or scrolling. */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .sidebar-scroll:hover {
+    scrollbar-color: hsl(var(--sidebar-accent)) transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 9999px;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background: hsl(var(--sidebar-accent));
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+}
