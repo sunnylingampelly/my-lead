@@ -12,7 +12,7 @@ design, ER diagram and API plan.
 ## Stack
 
 * **Backend:** Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, Celery, Redis, Argon2, JWT.
-* **Database:** MySQL 8 in production. SQLite for docker-less development and tests.
+* **Database:** MySQL only: MySQL 8 in production; MariaDB 10.4+ (e.g. XAMPP) works for local development and tests.
 * **Frontend:** React 19, TypeScript, Vite, Tailwind CSS, shadcn-style Radix components, TanStack Query,
   React Hook Form, Zod, Lucide, Recharts.
 * **Tests:** pytest and Playwright.
@@ -60,14 +60,15 @@ written to `backend/var/call_log` and shown at http://localhost:5173/dev/calls.
 ## Tests
 
 ```bash
-# Backend: runs real Alembic migrations against a temporary SQLite database
+# Backend: runs real Alembic migrations against the MySQL test database (TEST_DATABASE_URL,
+# default signalcraft_test on 127.0.0.1); the suite wipes that database
 cd backend && .venv/Scripts/python -m pytest
 .venv/Scripts/ruff check app tests migrations
 
 # Frontend type-check, lint and build
 cd frontend && npm run typecheck && npm run lint && npm run build
 
-# End-to-end: start the backend and frontend first (runs one browser at a time on SQLite)
+# End-to-end: start the backend and frontend first (runs one browser at a time)
 cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 

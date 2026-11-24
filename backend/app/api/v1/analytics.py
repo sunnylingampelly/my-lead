@@ -1,5 +1,6 @@
 """Analytics endpoints, scoped to /apps/{app_id}/analytics."""
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
@@ -11,8 +12,9 @@ router = APIRouter(prefix="/apps/{app_id}/analytics", tags=["Analytics"])
 
 
 @router.get("")
-def overview(ctx: AppCtx, db: DB, start: date | None = Query(None), end: date | None = Query(None)):
-    return analytics.series(db, ctx, start, end)
+def overview(ctx: AppCtx, db: DB, start: date | None = Query(None), end: date | None = Query(None),
+             rank: Literal["volume", "rate"] = Query("volume")):
+    return analytics.series(db, ctx, start, end, rank)
 
 
 @router.get("/export.csv")

@@ -7,26 +7,19 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarClock,
-  Check,
-  CheckCircle2,
-  Cloud,
-  CloudOff,
   Eye,
   FileCode2,
-  Filter,
   LayoutTemplate,
-  ListChecks,
   Loader2,
   Mail,
   Plus,
+  RotateCw,
   Save,
   Send,
   Type,
   Users,
-  XCircle,
 } from 'lucide-react'
 import { emailApi, eqk, useCampaign, useSenders, useTemplates } from '@/api/email'
-import { useLists, useSegments } from '@/api/audience'
 import { audienceApi } from '@/api/audience'
 import { errorMessage } from '@/api/client'
 import { ErrorState, FullPageSpinner } from '@/components/page'
@@ -42,7 +35,9 @@ import { formatCount } from '@/lib/regions'
 import { TIMEZONES } from '@/lib/timezones'
 import { cn } from '@/lib/utils'
 import type { Campaign, CampaignAudience, EditorKind } from '@/types/email'
+import { AudiencePicker, money, ReadinessList, SaveIndicator, StepNav, useCampaignAutosave, WalletLine } from './campaignKit'
 import { CampaignStatusBadge, DeviceToggle, EmailFrame, HtmlEditor, VariablePicker } from './components'
+import { AddSenderDialog } from './senderDialog'
 import { STARTERS } from './starters'
 
 const VisualEditor = lazy(() => import('./VisualEditor').then((m) => ({ default: m.VisualEditor })))
@@ -58,79 +53,78 @@ type Draft = Partial<Campaign>
 
 // ------------------------------------------------------------------ autosave
 
+/** Settings and audience are saved separately from the design, so a failed design save can never drop them. */
 function useAutosave(appId: string, campaign: Campaign | undefined) {
   const qc = useQueryClient()
-  const [draft, setDraft] = useState<Draft>({})
-  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const pending = useRef<Draft>({})
-  const timer = useRef<number | undefined>(undefined)
-  const loaded = useRef(false)
-
-  useEffect(() => {
-    if (campaign && !loaded.current) {
-      loaded.current = true
-      setDraft(campaign)
-    }
-  }, [campaign])
-
-  const flush = useCallback(async () => {
-    window.clearTimeout(timer.current)
-    const body = pending.current
-    if (!campaign || !Object.keys(body).length) return true
-    pending.current = {}
-    setState('saving')
-    try {
-      const saved = await emailApi(appId).updateCampaign(campaign.id, body)
-      qc.setQueryData(eqk.campaign(appId, campaign.id), saved)
-      setState('saved')
-      return true
-    } catch (e) {
-      pending.current = { ...body, ...pending.current }
-      setState('error')
-      toast.error(errorMessage(e))
-      return false
-    }
-  }, [appId, campaign, qc])
-
-  const update = useCallback(
-    (patch: Draft) => {
-      setDraft((d) => ({ ...d, ...patch }))
-      pending.current = { ...pending.current, ...patch }
-      window.clearTimeout(timer.current)
-      timer.current = window.setTimeout(flush, 800)
-    },
-    [flush],
-  )
-
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  return { draft, update, flush, state }
-}
-
-function SaveIndicator({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
-  if (state === 'saving')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> Saving…
-      </span>
-    )
-  if (state === 'error')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-destructive">
-        <CloudOff className="size-3.5" /> Not saved
-      </span>
-    )
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="save-state">
-      <Cloud className="size-3.5" /> {state === 'saved' ? 'All changes saved' : 'Draft'}
-    </span>
-  )
+  return useCampaignAutosave<Campaign>({
+    campaign,
+    save: (id, body) => emailApi(appId).updateCampaign(id, body),
+    onSaved: (saved) => qc.setQueryData(eqk.campaign(appId, saved.id), saved),
+    isolate: [{ name: 'the email design', keys: ['design', 'html'] }],
+    rest: 'your settings and audience',
+  })
 }
 
 // ------------------------------------------------------------------ steps
 
+/** Unverified sender: resend the confirmation, or re-check after confirming (also polled automatically). */
+function SenderVerifyActions({ senderId, email }: { senderId: string; email?: string }) {
+  const { app } = useWorkspace()
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState<'resend' | 'check' | null>(null)
+  return (
+    <span className="mt-1.5 flex flex-wrap gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        loading={busy === 'resend'}
+        data-testid="resend-confirmation"
+        onClick={async () => {
+          setBusy('resend')
+          try {
+            await emailApi(app!.id).resendSender(senderId)
+            toast.success(`Confirmation email sent again${email ? ` to ${email}` : ''}`)
+          } catch (e) {
+            toast.error(errorMessage(e))
+          } finally {
+            setBusy(null)
+          }
+        }}
+      >
+        <RotateCw /> Resend confirmation
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        loading={busy === 'check'}
+        data-testid="check-again"
+        onClick={async () => {
+          setBusy('check')
+          const list = await qc.fetchQuery({ queryKey: eqk.senders(app!.id), queryFn: () => emailApi(app!.id).senders(), staleTime: 0 })
+          await qc.invalidateQueries({ queryKey: ['email', app!.id, 'readiness'] })
+          const s = list.find((x) => x.id === senderId)
+          if (s?.status === 'verified') toast.success(`${s.from_email} is verified`)
+          else toast.info('Not confirmed yet. Open the email we sent and click the link; this page checks every few seconds.')
+          setBusy(null)
+        }}
+      >
+        I’ve confirmed — check again
+      </Button>
+    </span>
+  )
+}
+
 function SetupStep({ draft, update }: { draft: Draft; update: (p: Draft) => void }) {
   const { app, can } = useWorkspace()
-  const senders = useSenders(app!.id)
+  const senders = useSenders(app!.id, true)
+  const [adding, setAdding] = useState(false)
+  // A draft without a sender gets the first verified one as soon as one exists.
+  useEffect(() => {
+    if (!draft.sender_id && senders.data?.length) {
+      const pick = senders.data.find((s) => s.status === 'verified' && s.is_default) ?? senders.data.find((s) => s.status === 'verified')
+      if (pick) update({ sender_id: pick.id, from_name: pick.from_name, from_email: pick.from_email })
+    }
+  }, [draft.sender_id, senders.data, update])
   const subjectRef = useRef<HTMLInputElement>(null)
   const insertSubject = (token: string) => {
     const el = subjectRef.current
@@ -176,21 +170,27 @@ function SetupStep({ draft, update }: { draft: Draft; update: (p: Draft) => void
                 label="From"
                 htmlFor="c-sender"
                 hint={
-                  sender?.status === 'pending' ? (
-                    <span className="text-warning-strong">This sender is not verified yet. Check its inbox for the confirmation email.</span>
+                  sender && sender.status !== 'verified' ? (
+                    <span className="block text-warning-strong" data-testid="sender-pending">
+                      Not verified yet: open the email we sent to {sender.from_email} and click the link. This updates by itself.
+                      {can('settings.write') && <SenderVerifyActions senderId={sender.id} email={sender.from_email} />}
+                    </span>
                   ) : senders.data?.length === 0 ? (
-                    'Add a sender address first.'
+                    can('settings.write') ? 'Add a sender address to send from.' : 'Ask an admin to add a sender address.'
                   ) : undefined
                 }
                 action={
                   can('settings.write') && (
-                    <Link to={`/apps/${app!.id}/email/senders`} className="text-xs font-medium text-primary hover:underline">
-                      Manage senders
-                    </Link>
+                    <button type="button" onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" data-testid="add-sender-inline">
+                      <Plus className="size-3" /> Add sender
+                    </button>
                   )
                 }
               >
-                <Select id="c-sender" value={draft.sender_id ?? ''} onChange={(e) => update({ sender_id: e.target.value || null })}>
+                <Select id="c-sender" value={draft.sender_id ?? ''} onChange={(e) => {
+                  const s = senders.data?.find((x) => x.id === e.target.value)
+                  update({ sender_id: e.target.value || null, ...(s ? { from_name: s.from_name, from_email: s.from_email } : {}) })
+                }}>
                   <option value="">Choose a sender…</option>
                   {senders.data?.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -260,6 +260,7 @@ function SetupStep({ draft, update }: { draft: Draft; update: (p: Draft) => void
           </CardContent>
         </Card>
       </div>
+      <AddSenderDialog open={adding} onOpenChange={setAdding} onCreated={(s) => update({ sender_id: s.id, from_name: s.from_name, from_email: s.from_email })} />
     </div>
   )
 }
@@ -541,10 +542,7 @@ const EXCLUDE_LABEL: Record<string, string> = {
 
 function AudienceStep({ draft, update }: { draft: Draft; update: (p: Draft) => void }) {
   const { app } = useWorkspace()
-  const segments = useSegments(app!.id)
-  const lists = useLists(app!.id)
   const aud: CampaignAudience = draft.audience ?? {}
-  const set = (a: CampaignAudience) => update({ audience: { all: false, list_ids: [], segment_ids: [], ...a } })
   const [debounced, setDebounced] = useState(aud)
   useEffect(() => {
     const t = setTimeout(() => setDebounced(aud), 300)
@@ -553,70 +551,16 @@ function AudienceStep({ draft, update }: { draft: Draft; update: (p: Draft) => v
   }, [JSON.stringify(aud)])
   const est = useQuery({ queryKey: ['estimate', app!.id, debounced], queryFn: () => emailApi(app!.id).estimate(debounced), placeholderData: (p) => p })
   const f = (n: number) => formatCount(n, app!.default_country)
-  const toggle = (key: 'list_ids' | 'segment_ids', id: string, on: boolean) => {
-    const cur = new Set(aud[key] ?? [])
-    if (on) cur.add(id)
-    else cur.delete(id)
-    set({ ...aud, all: false, [key]: [...cur] })
-  }
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>Who should receive this?</CardTitle>
-            <CardDescription>Choose segments and lists. People in more than one are emailed once.</CardDescription>
+            <CardDescription>Choose segments, lists or people. Anyone in more than one is emailed once.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', aud.all && 'border-primary bg-accent/40')}>
-              <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!!aud.all} onChange={() => set({ all: true })} />
-              <span>
-                <span className="text-sm font-medium">All reachable contacts</span>
-                <span className="block text-xs text-muted-foreground">Everyone in this application who can receive marketing email.</span>
-              </span>
-            </label>
-            <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', !aud.all && 'border-primary bg-accent/40')}>
-              <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!aud.all} onChange={() => set({ ...aud, all: false })} />
-              <span className="text-sm font-medium">Specific segments and lists</span>
-            </label>
-            {!aud.all && (
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Filter className="size-3.5" /> Segments
-                  </div>
-                  <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-                    {segments.data?.length === 0 && (
-                      <p className="p-2 text-sm text-muted-foreground">
-                        No segments yet. <Link className="text-primary hover:underline" to={`/apps/${app!.id}/audience/segments/new`}>Create one</Link>
-                      </p>
-                    )}
-                    {segments.data?.map((s) => (
-                      <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                        <Checkbox checked={aud.segment_ids?.includes(s.id) ?? false} onChange={(e) => toggle('segment_ids', s.id, e.target.checked)} aria-label={s.name} />
-                        <span className="flex-1 truncate">{s.name}</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{s.last_count === null ? '—' : f(s.last_count)}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <ListChecks className="size-3.5" /> Lists
-                  </div>
-                  <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-                    {lists.data?.length === 0 && <p className="p-2 text-sm text-muted-foreground">No lists yet.</p>}
-                    {lists.data?.map((l) => (
-                      <label key={l.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                        <Checkbox checked={aud.list_ids?.includes(l.id) ?? false} onChange={(e) => toggle('list_ids', l.id, e.target.checked)} aria-label={l.name} />
-                        <span className="flex-1 truncate">{l.name}</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{f(l.contact_count)}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+          <CardContent>
+            <AudiencePicker audience={aud} onChange={(a) => update({ audience: a })} allHint="Everyone in this application who can receive marketing email." />
           </CardContent>
         </Card>
       </div>
@@ -650,12 +594,18 @@ function AudienceStep({ draft, update }: { draft: Draft; update: (p: Draft) => v
 }
 
 function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) => void; flush: () => Promise<boolean> }) {
-  const { app } = useWorkspace()
+  const { app, can } = useWorkspace()
   const user = useUser()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const api = emailApi(app!.id)
-  const ready = useQuery({ queryKey: eqk.readiness(app!.id, draft.id!), queryFn: () => api.readiness(draft.id!) })
+  const ready = useQuery({
+    queryKey: eqk.readiness(app!.id, draft.id!),
+    queryFn: () => api.readiness(draft.id!),
+    refetchOnMount: 'always',
+    // While the sender awaits confirmation, re-check every few seconds.
+    refetchInterval: (q) => (q.state.data?.checks.some((c) => c.key === 'sender' && !c.ok && c.meta?.status === 'pending') ? 4000 : false),
+  })
   const [testTo, setTestTo] = useState(user.email)
   const [testing, setTesting] = useState(false)
   const [mode, setMode] = useState<'now' | 'schedule'>('now')
@@ -670,8 +620,6 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
   const [busy, setBusy] = useState(false)
   const eligible = ready.data?.estimate?.eligible ?? 0
   const f = (n: number) => formatCount(n, app!.default_country)
-
-  const stepFor: Record<string, StepKey> = { sender: 'setup', subject: 'setup', content: 'content', personalisation: 'content', audience: 'audience', postal_address: 'review' }
 
   const launch = async () => {
     setBusy(true)
@@ -697,7 +645,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Checklist</CardTitle>
@@ -707,27 +655,16 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
             {ready.isLoading ? (
               <Skeleton className="h-40 w-full" />
             ) : (
-              <ul className="divide-y" data-testid="readiness">
-                {ready.data?.checks.map((c) => (
-                  <li key={c.key} className="flex items-start gap-3 py-3">
-                    {c.ok ? <CheckCircle2 className="mt-0.5 size-5 text-success-strong" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium">{c.label}</div>
-                      {c.detail && <div className="text-xs text-muted-foreground">{c.detail}</div>}
-                    </div>
-                    {!c.ok &&
-                      (c.key === 'postal_address' ? (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to={`/apps/${app!.id}/settings`}>Fix</Link>
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={() => goTo(stepFor[c.key] ?? 'setup')}>
-                          Fix
-                        </Button>
-                      ))}
-                  </li>
-                ))}
-              </ul>
+              <ReadinessList
+                checks={ready.data?.checks ?? []}
+                channel="email"
+                onStep={(s) => goTo(s as StepKey)}
+                rowExtra={(c) =>
+                  c.key === 'sender' && !c.ok && c.meta?.status === 'pending' && can('settings.write') ? (
+                    <SenderVerifyActions senderId={String(c.meta.sender_id)} email={String(c.meta.from_email ?? '')} />
+                  ) : null
+                }
+              />
             )}
           </CardContent>
         </Card>
@@ -742,29 +679,33 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 ['Subject', draft.subject || '—', 'setup'],
                 ['Preview text', draft.preheader || '—', 'setup'],
                 ['Recipients', ready.data?.estimate ? `${f(eligible)} reachable contacts` : '—', 'audience'],
+                ['Estimated cost', ready.data?.cost ? `${money(ready.data.cost.total, ready.data.cost.currency)} (${money(ready.data.cost.unit_price, ready.data.cost.currency)} per email)` : '—', 'audience'],
                 ['Tracking', `${draft.track_opens ? 'Opens' : 'No opens'} · ${draft.track_clicks ? 'clicks' : 'no clicks'}`, 'setup'],
               ].map(([k, v, step]) => (
-                <div key={k} className="flex items-center gap-4 py-2.5">
-                  <dt className="w-28 shrink-0 text-muted-foreground">{k}</dt>
-                  <dd className="min-w-0 flex-1 truncate">{v}</dd>
+                <div key={k} className="flex items-center gap-3 py-2.5 sm:gap-4">
+                  <dt className="w-24 shrink-0 text-muted-foreground sm:w-28">{k}</dt>
+                  <dd className="min-w-0 flex-1 truncate" data-testid={k === 'Estimated cost' ? 'cost-estimate' : undefined}>{v}</dd>
                   <button className="text-xs font-medium text-primary hover:underline" onClick={() => goTo(step as StepKey)}>
                     Edit
                   </button>
                 </div>
               ))}
             </dl>
+            <div className="mt-2">
+              <WalletLine wallet={ready.data?.wallet} cost={ready.data?.cost} />
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Send a test</CardTitle>
             <CardDescription>Up to five addresses, comma separated. Uses sample personalisation.</CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
-            <Input value={testTo} onChange={(e) => setTestTo(e.target.value)} aria-label="Test recipients" />
+            <Input className="min-w-0" value={testTo} onChange={(e) => setTestTo(e.target.value)} aria-label="Test recipients" />
             <Button
               variant="outline"
               loading={testing}
@@ -862,7 +803,7 @@ export function CampaignEditorPage() {
     const d = new Set<StepKey>()
     if (draft.sender_id && draft.subject) d.add('setup')
     if (draft.html || draft.text) d.add('content')
-    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length) d.add('audience')
+    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length || draft.audience?.contact_ids?.length) d.add('audience')
     return d
   }, [draft])
 
@@ -901,31 +842,14 @@ export function CampaignEditorPage() {
         <Button variant="ghost" size="icon" aria-label="Back to campaigns" onClick={async () => { await flush(); navigate(`/apps/${appId}/email/campaigns`) }}>
           <ArrowLeft />
         </Button>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-xl font-semibold tracking-tight">{draft.name || 'Untitled campaign'}</h1>
             <CampaignStatusBadge status={c.status} />
           </div>
-          <SaveIndicator state={state} />
+          <SaveIndicator state={state} onRetry={() => void flush()} />
         </div>
-        <nav className="ml-auto flex items-center gap-1 rounded-xl border bg-card p-1 shadow-card" aria-label="Campaign steps">
-          {STEPS.map((s, i) => (
-            <button
-              key={s.key}
-              onClick={() => goTo(s.key)}
-              aria-current={step === s.key ? 'step' : undefined}
-              className={cn(
-                'flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition',
-                step === s.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <span className={cn('flex size-5 items-center justify-center rounded-full text-[11px]', step === s.key ? 'bg-white/20' : doneSteps.has(s.key) ? 'bg-success-soft text-success-strong' : 'bg-muted')}>
-                {doneSteps.has(s.key) && step !== s.key ? <Check className="size-3" /> : i + 1}
-              </span>
-              <span className="hidden md:inline">{s.label}</span>
-            </button>
-          ))}
-        </nav>
+        <StepNav steps={STEPS} step={step} done={doneSteps} onGo={goTo} />
       </div>
 
       {step === 'setup' && <SetupStep draft={draft} update={update} />}

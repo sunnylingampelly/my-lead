@@ -16,7 +16,6 @@ class DltConfigIn(BaseModel):
     dlt_platform: str | None = Field(default=None, max_length=40)
     us_brand_id: str | None = Field(default=None, max_length=64)
     us_campaign_id: str | None = Field(default=None, max_length=64)
-    us_messaging_service_sid: str | None = Field(default=None, max_length=64)
     attest: bool = False
 
     @field_validator("principal_entity_id")
@@ -33,7 +32,6 @@ class DltConfigOut(ORMModel):
     dlt_platform: str | None
     us_brand_id: str | None
     us_campaign_id: str | None
-    us_messaging_service_sid: str | None
     attested_at: datetime | None
     attested_by_name: str | None = None
 
@@ -42,7 +40,7 @@ class SenderIn(BaseModel):
     sender_id: str = Field(min_length=3, max_length=20)
     country: Literal["IN", "US"]
     kind: Literal["promotional", "service", "transactional", "long_code", "toll_free", "short_code"]
-    provider: Literal["simulation", "msg91", "twilio"] = "simulation"
+    provider: Literal["simulation", "sns"] = "simulation"
     dlt_header_id: str | None = Field(default=None, max_length=32)
 
     @field_validator("sender_id")
@@ -101,6 +99,7 @@ class CampaignCreate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     category: Category = "promotional"
     template_id: str | None = Field(default=None, max_length=36)
+    audience: Audience | None = None
 
 
 class CampaignUpdate(BaseModel):

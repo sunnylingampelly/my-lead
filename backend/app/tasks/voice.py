@@ -107,5 +107,29 @@ def process_voice_webhook(webhook_event_id: str) -> str:
         if not applied:
             w.error = "No matching call, unknown status or duplicate"
         w.processed_at = utcnow()
+        ai_done = call is not None and call.agent_id and call.ai_processed_at is None and call.status in events.FINAL
+        call_id = call.id if call is not None else None
+        result = w.status
         db.commit()
-        return w.status
+    if ai_done:
+        from app.workers.dispatch import dispatch
+
+        dispatch(process_ai_call, call_id)
+    return result
+
+
+@celery_app.task(name="app.tasks.voice.process_ai_call", autoretry_for=(OperationalError,), retry_backoff=True,
+                 max_retries=5)
+def process_ai_call(call_id: str) -> str:
+    """Extract the AI call's summary and outcomes and push them into the CRM."""
+    from app.services.voice import ai_results
+
+    return ai_results.process(call_id)
+
+
+@celery_app.task(name="app.tasks.voice.sweep_ai_calls")
+def sweep_ai_calls() -> int:
+    """AI calls that finished but whose summary and CRM results are still missing (missed callbacks)."""
+    from app.services.voice import ai_results
+
+    return ai_results.sweep()

@@ -1,7 +1,6 @@
 """SMS end to end: encoding, India DLT and US 10DLC rules, sending, receipts, keywords, webhooks, access."""
 import json
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlencode
 
 import pytest
 from sqlalchemy import select, update
@@ -12,8 +11,6 @@ from app.core.database import SessionLocal
 from app.models import ApplicationSettings, Contact, SuppressionEntry
 from app.models.sms import SmsCampaign, SmsMessage
 from app.providers.sms.simulation import outbox_path
-from app.providers.sms.twilio import twilio_signature
-from app.services.email.render import public_url
 from app.services.sms import engine, rules
 from app.services.sms.encoding import analyse
 from tests.conftest import Api, invite_and_join
@@ -311,8 +308,51 @@ def test_simulation_webhook_signed_receipts(india):
         assert m.status == "undelivered" and m.error_code == "30005"
 
 
-def test_twilio_signature_and_carrier_opt_out(us, monkeypatch):
-    a = us
+class _FakeSns:
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def publish(self, **kw):
+        self.calls.append(kw)
+        if self.error:
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": self.error, "Message": "nope"},
+                               "ResponseMetadata": {"HTTPStatusCode": 400}}, "Publish")
+        return {"MessageId": "sns-msg-1"}
+
+
+def test_sns_provider_india_dlt_and_us_origination():
+    from app.providers.sms.base import OutboundSms, TransientSmsError
+    from app.providers.sms.sns import SnsSmsProvider
+
+    fake = _FakeSns()
+    sns = SnsSmsProvider(fake)
+    r = sns.send(OutboundSms(to="+919876543210", sender_id="ACMEIN", body="Hi", category="transactional",
+                             dlt_template_id="T1", dlt_entity_id="E1", country="IN"))
+    assert r.accepted and r.provider_message_id == "sns-msg-1"
+    attrs = {k: v["StringValue"] for k, v in fake.calls[0]["MessageAttributes"].items()}
+    assert attrs == {"AWS.SNS.SMS.SMSType": "Transactional", "AWS.SNS.SMS.SenderID": "ACMEIN",
+                     "AWS.MM.SMS.EntityId": "E1", "AWS.MM.SMS.TemplateId": "T1"}
+
+    sns.send(OutboundSms(to="+14155552671", sender_id="+14155550100", body="Sale", category="promotional",
+                         country="US"))
+    attrs = {k: v["StringValue"] for k, v in fake.calls[1]["MessageAttributes"].items()}
+    assert attrs == {"AWS.SNS.SMS.SMSType": "Promotional", "AWS.MM.SMS.OriginationNumber": "+14155550100"}
+
+    # India without DLT IDs never reaches AWS.
+    r = sns.send(OutboundSms(to="+919876543210", sender_id="ACMEIN", body="Hi", category="service", country="IN"))
+    assert not r.accepted and r.error_code == "DLT_MISSING" and len(fake.calls) == 2
+
+    r = SnsSmsProvider(_FakeSns("InvalidParameter")).send(
+        OutboundSms(to="+14155552671", sender_id="+14155550100", body="x", category="service", country="US"))
+    assert not r.accepted and r.permanent_failure and r.error_code == "InvalidParameter"
+    with pytest.raises(TransientSmsError):
+        SnsSmsProvider(_FakeSns("Throttling")).send(
+            OutboundSms(to="+14155552671", sender_id="+14155550100", body="x", category="service", country="US"))
+
+
+def _sent_via_sns(a) -> str:
     s = a.post(f"{a.s}/senders", json={"sender_id": "+14155550100", "country": "US", "kind": "long_code"}).json()
     a.post(f"{a.s}/senders/{s['id']}/attest")
     a.put(f"{a.s}/registration", json={"us_brand_id": "B1", "us_campaign_id": "C1", "attest": True})
@@ -321,21 +361,67 @@ def test_twilio_signature_and_carrier_opt_out(us, monkeypatch):
     a.post(f"{a.s}/campaigns/{c['id']}/send")
     with SessionLocal() as db:
         db.execute(update(SmsMessage).where(SmsMessage.campaign_id == c["id"])
-                   .values(provider="twilio", provider_message_id="SM123", status="accepted", delivered_at=None))
+                   .values(provider="sns", provider_message_id="sns-abc", status="accepted", delivered_at=None))
         db.commit()
-    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "tw-secret")
-    url = public_url("/webhooks/sms/twilio/status")
-    params = {"MessageSid": "SM123", "MessageStatus": "failed", "ErrorCode": "21610"}
+    return c["id"]
+
+
+class _FakeLogs:
+    class exceptions:  # noqa: N801 - mirrors the boto3 client attribute
+        class ResourceNotFoundException(Exception):
+            pass
+
+    def __init__(self, events_by_group):
+        self.events_by_group, self.calls = events_by_group, []
+
+    def filter_log_events(self, **kw):
+        self.calls.append(kw)
+        if kw["logGroupName"] not in self.events_by_group:
+            raise self.exceptions.ResourceNotFoundException()
+        return {"events": [{"message": json.dumps(e)} for e in self.events_by_group[kw["logGroupName"]]]}
+
+
+def test_sns_delivery_logs_and_carrier_opt_out(us, monkeypatch):
+    from app.services.sms import sns_receipts
+
+    a = us
+    cid = _sent_via_sns(a)
+    monkeypatch.setattr(settings, "AWS_ACCOUNT_ID", "123456789012")
+    monkeypatch.setattr(settings, "AWS_REGION", "us-east-1")
+    failure = {"notification": {"messageId": "sns-abc", "timestamp": "2026-11-18 10:00:00.000"},
+               "delivery": {"destination": "+14155552671", "providerResponse": "Phone number is opted out"},
+               "status": "FAILURE"}
+    logs = _FakeLogs({"sns/us-east-1/123456789012/DirectPublishToPhoneNumber/Failure": [failure]})
+    with SessionLocal() as db:
+        assert sns_receipts.poll(db, logs) == 1
+        assert sns_receipts.poll(db, logs) == 0  # the same log line is stored once
+    assert {c["logGroupName"] for c in logs.calls} == {
+        "sns/us-east-1/123456789012/DirectPublishToPhoneNumber",
+        "sns/us-east-1/123456789012/DirectPublishToPhoneNumber/Failure"}
+    with SessionLocal() as db:
+        m = db.scalar(select(SmsMessage).where(SmsMessage.campaign_id == cid))
+        assert m.status == "failed" and m.error_code == "OPTED_OUT"
+    assert a.get(f"{a.base}/contacts/{a.jane}").json()["sms_consent"] is False
+
+    ok = sns_receipts.parse_log_event(json.dumps({"notification": {"messageId": "x"}, "status": "SUCCESS",
+                                                  "delivery": {"numberOfMessageParts": 1}}))
+    assert ok["status"] == "delivered" and ok["error_code"] is None
+    assert sns_receipts.parse_log_event("not json") is None
+
+
+def test_sns_inbound_reply_webhook(us, monkeypatch):
+    a = us
+    _sent_via_sns(a)
+    inner = {"originationNumber": "+14155552671", "destinationNumber": "+14155550100", "messageKeyword": "STOP",
+             "messageBody": "STOP", "inboundMessageId": "in-1"}
+    note = {"Type": "Notification", "MessageId": "n-1", "TopicArn": "arn:aws:sns:us-east-1:1:sms-in",
+            "Message": json.dumps(inner), "Timestamp": "2026-11-18T10:00:00.000Z", "SignatureVersion": "1",
+            "Signature": "Zm9yZ2Vk", "SigningCertURL": "https://evil.example.com/cert.pem"}
     anon = Api()
-    hdr = {"content-type": "application/x-www-form-urlencoded"}
-    r = anon.client.post("/api/v1/webhooks/sms/twilio/status", content=urlencode(params),
-                         headers={**hdr, "x-twilio-signature": "forged"})
-    assert r.status_code == 401
-    r = anon.client.post("/api/v1/webhooks/sms/twilio/status", content=urlencode(params),
-                         headers={**hdr, "x-twilio-signature": twilio_signature("tw-secret", url, params)})
-    assert r.status_code == 204
-    ct = a.get(f"{a.base}/contacts/{a.jane}").json()
-    assert ct["sms_consent"] is False  # 21610: the recipient had opted out at the carrier
+    assert anon.client.post("/api/v1/webhooks/sms/sns", json=note).status_code == 401
+    monkeypatch.setattr(settings, "SES_VERIFY_SNS_SIGNATURES", False)
+    assert anon.client.post("/api/v1/webhooks/sms/sns", json=note).status_code == 200
+    assert a.get(f"{a.base}/contacts/{a.jane}").json()["sms_consent"] is False
 
 
 # ------------------------------------------------------------------ access
@@ -355,3 +441,92 @@ def test_permissions_and_isolation(india):
     other.post("/applications", json={"organization_id": org["id"], "name": "Theirs"})
     assert other.get(f"{a.s}/campaigns/{c['id']}").status_code in (403, 404)
     assert other.get(f"{a.s}/registration").status_code in (403, 404)
+
+
+# ------------------------------------------------------------------ first-send guidance (UX fixes)
+
+def _quiet_now(app_id: str, tz: str) -> None:
+    """Quiet hours that cover the current moment in `tz` (one hour either side)."""
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(tz))
+    start, end = (now - timedelta(hours=1)).strftime("%H:%M"), (now + timedelta(hours=1)).strftime("%H:%M")
+    with SessionLocal() as db:
+        db.execute(update(ApplicationSettings).where(ApplicationSettings.application_id == app_id)
+                   .values(quiet_hours_start=start, quiet_hours_end=end))
+        db.commit()
+
+
+def test_india_requirements_shown_before_a_sender_is_chosen(india):
+    a = india
+    c = a.post(f"{a.s}/campaigns", json={"name": "First SMS"}).json()
+    rd = a.get(f"{a.s}/campaigns/{c['id']}/readiness").json()
+    checks = {ch["key"]: ch for ch in rd["checks"]}
+    # Every Indian requirement is listed up front, with a fix action.
+    assert {"sender", "registration", "category", "dlt_template", "consent", "content", "audience"} <= set(checks)
+    assert checks["registration"]["action_url"] == f"{a.base}/sms/registration"
+    assert checks["sender"]["step"] == "setup" and checks["sender"]["action_url"] == f"{a.base}/sms/senders"
+    assert checks["category"]["pending"] is True and "numeric" in checks["category"]["detail"]
+    assert checks["dlt_template"]["pending"] is True
+    assert checks["consent"]["ok"] is True  # consented Indian mobiles exist
+    # Priced in the app's market (INR), not the default USD table, before any sender is chosen.
+    assert rd["country"] == "IN" and rd["sender_chosen"] is False and rd["cost"]["currency"] == "INR"
+    assert rd["wallet"]["currency"] and "available" in rd["wallet"]
+
+
+def test_us_requirements_shown_before_a_sender_is_chosen(us):
+    a = us
+    c = a.post(f"{a.s}/campaigns", json={"name": "First US SMS"}).json()
+    a.patch(f"{a.s}/campaigns/{c['id']}", json={"body": "Sale today", "append_opt_out": False})
+    rd = a.get(f"{a.s}/campaigns/{c['id']}/readiness").json()
+    checks = {ch["key"]: ch for ch in rd["checks"]}
+    assert checks["registration"]["label"] == "A2P 10DLC registration" and checks["registration"]["pending"]
+    assert checks["opt_out"]["ok"] is False and checks["opt_out"]["step"] == "message"
+    assert checks["consent"]["label"].endswith("(TCPA)") and checks["consent"]["ok"] is True
+    assert "dlt_template" not in checks and rd["cost"]["currency"] == "USD"
+
+
+def test_quiet_hours_wait_estimate_before_sending(india):
+    a = india
+    c = ready_india(a)
+    rd = a.get(f"{a.s}/campaigns/{c['id']}/readiness").json()
+    assert rd["quiet_hours"]["applies"] is True and rd["quiet_hours"]["waiting"] == 0
+    _quiet_now(a.app_id, "Asia/Kolkata")
+    rd = a.get(f"{a.s}/campaigns/{c['id']}/readiness").json()
+    q = rd["quiet_hours"]
+    assert q["waiting"] == 4 and q["timezone"] == "Asia/Kolkata" and q["next_window_at"]
+    at = datetime.fromisoformat(q["next_window_at"])
+    assert timedelta(minutes=50) < at - datetime.now(UTC) < timedelta(minutes=70)
+    assert rd["ready"] is True  # waiting is a warning, not a blocker
+    a.patch(f"{a.s}/campaigns/{c['id']}", json={"category": "transactional"})
+    assert a.get(f"{a.s}/campaigns/{c['id']}/readiness").json()["quiet_hours"]["waiting"] == 0
+
+
+def test_inbound_reply_is_linked_to_contact_and_campaign(india):
+    a = india
+    c = ready_india(a)
+    assert a.post(f"{a.s}/campaigns/{c['id']}/send").status_code == 200
+    r = a.post(f"{a.s}/simulate-inbound", json={"from_phone": "+919876543210", "to_sender": "561234",
+                                                "body": "Is the sale on Sunday too?", "event_id": "reply-1"})
+    assert r.status_code == 200, r.text
+    a.post(f"{a.s}/simulate-inbound", json={"from_phone": "+919999999999", "to_sender": "561234",
+                                            "body": "who is this", "event_id": "reply-2"})
+    items = {i["body"]: i for i in a.get(f"{a.s}/inbound").json()["items"]}
+    reply = items["Is the sale on Sunday too?"]
+    assert reply["contact"]["id"] == a.contacts["Asha"] and reply["contact"]["name"].startswith("Asha")
+    assert reply["campaign"] == {"id": c["id"], "name": "Diwali SMS"}
+    stranger = items["who is this"]
+    assert stranger["contact"] is None and stranger["campaign"] is None
+    ids = a.get(f"{a.s}/campaigns/{c['id']}/recipients/ids", params={"status": "replied"}).json()
+    assert ids["contact_ids"] == [a.contacts["Asha"]]
+    failed = a.get(f"{a.s}/campaigns/{c['id']}/recipients/ids", params={"status": "not_delivered"}).json()
+    assert failed["total"] == 2
+
+
+def test_sms_campaign_created_with_contact_ids(india):
+    a = india
+    ids = [a.contacts["Asha"], a.contacts["Bob"]]
+    c = a.post(f"{a.s}/campaigns", json={"name": "Picked", "audience": {"contact_ids": ids}})
+    assert c.status_code == 201 and c.json()["audience"]["contact_ids"] == ids
+    rd = a.get(f"{a.s}/campaigns/{c.json()['id']}/readiness").json()
+    assert rd["estimate"]["matched"] == 2 and rd["estimate"]["eligible"] == 1  # Bob is in the US

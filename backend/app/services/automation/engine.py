@@ -24,7 +24,7 @@ from app.services.audience.import_processor import TaskContext
 from app.services.audience.query import base_query
 from app.services.audience.segments import compile_rules
 from app.services.automation import actions
-from app.services.automation.graph import Graph, data, wait_seconds
+from app.services.automation.graph import CRM_TRIGGERS, ENGAGEMENT_TRIGGERS, Graph, data, label, wait_seconds
 from app.services.automation.workflows import CAMPAIGN_MODEL
 from app.utils.time import utcnow
 
@@ -68,6 +68,57 @@ def _candidates(db: Session, w: Workflow, trig: dict, since) -> list[tuple[str, 
         stmt = base_query(_ctx(db, w)).where(compile_rules(db, _ctx(db, w), seg.rules)).with_only_columns(
             Contact.id).limit(SCAN_LIMIT)
         return [(r[0], "segment") for r in db.execute(stmt)]
+    if kind in ENGAGEMENT_TRIGGERS:
+        return _engagement_candidates(db, w.application_id, kind, d, since, once)
+    if kind in CRM_TRIGGERS:
+        from app.services.crm.automation import candidates
+
+        return candidates(db, w.application_id, d, since, once, SCAN_LIMIT)
+    return []
+
+
+def _engagement_candidates(db: Session, app_id: str, kind: str, d: dict, since, once: bool) -> list[tuple[str, str]]:
+    """Replies, clicks, answered calls and opt-outs since `since`. Keys carry the event id when re-entry is on."""
+    from app.models import ConsentRecord, EmailEvent, SmsInbound, VoiceCall
+
+    if kind == "sms_replied":
+        q = (select(Contact.id, SmsInbound.id, SmsInbound.body, SmsInbound.keyword)
+             .join(Contact, (Contact.application_id == SmsInbound.application_id) & (Contact.phone == SmsInbound.from_phone))
+             .where(SmsInbound.application_id == app_id, SmsInbound.received_at >= since))
+        word = (d.get("keyword") or "").strip().lower()
+        out = []
+        for cid, eid, body, keyword in db.execute(q.order_by(SmsInbound.received_at).limit(SCAN_LIMIT)):
+            if keyword in ("stop", "start", "help"):
+                continue  # compliance keywords are handled by the platform, not journeys
+            first = (body or "").strip().split()[0].lower() if (body or "").strip() else ""
+            if word and first != word:
+                continue
+            out.append((cid, "sms_reply" if once else f"sms_reply:{eid}"))
+        return out
+    if kind == "email_clicked":
+        q = select(EmailEvent.contact_id, EmailEvent.id).where(
+            EmailEvent.application_id == app_id, EmailEvent.type == "clicked", EmailEvent.created_at >= since,
+            EmailEvent.contact_id.is_not(None))
+        if d.get("campaign_id"):
+            q = q.where(EmailEvent.campaign_id == d["campaign_id"])
+        rows = db.execute(q.order_by(EmailEvent.created_at).limit(SCAN_LIMIT)).all()
+        return [(c, "email_click" if once else f"email_click:{e}") for c, e in rows]
+    if kind == "call_answered":
+        q = select(VoiceCall.contact_id, VoiceCall.id).where(
+            VoiceCall.application_id == app_id, VoiceCall.answered_by == "human", VoiceCall.answered_at >= since,
+            VoiceCall.contact_id.is_not(None))
+        if d.get("campaign_id"):
+            q = q.where(VoiceCall.campaign_id == d["campaign_id"])
+        rows = db.execute(q.order_by(VoiceCall.answered_at).limit(SCAN_LIMIT)).all()
+        return [(c, "call_answered" if once else f"call_answered:{e}") for c, e in rows]
+    if kind == "unsubscribed":
+        q = select(ConsentRecord.contact_id, ConsentRecord.id).where(
+            ConsentRecord.application_id == app_id, ConsentRecord.status == "revoked",
+            ConsentRecord.created_at >= since)
+        if d.get("channel") in ("email", "sms", "voice"):
+            q = q.where(ConsentRecord.channel == d["channel"])
+        rows = db.execute(q.order_by(ConsentRecord.created_at).limit(SCAN_LIMIT)).all()
+        return [(c, "unsubscribed" if once else f"unsubscribed:{e}") for c, e in rows]
     return []
 
 
@@ -95,6 +146,23 @@ def enroll(db: Session, w: Workflow, pairs: list[tuple[str, str]]) -> int:
     return created
 
 
+def enroll_manual(db: Session, w: Workflow, contact_ids: list[str]) -> tuple[int, int]:
+    """Start the journey now for chosen contacts. Never enrolls someone already on the journey; someone who
+    finished it before is enrolled again only when the workflow allows re-entry. Returns (enrolled, skipped)."""
+    ids = list(dict.fromkeys(c for c in contact_ids if c))
+    if not ids:
+        return 0, 0
+    valid = set(db.scalars(select(Contact.id).where(Contact.application_id == w.application_id, Contact.id.in_(ids),
+                                                    Contact.status != "blocked")))
+    previous = set(db.scalars(select(WorkflowRun.contact_id).where(WorkflowRun.workflow_id == w.id,
+                                                                   WorkflowRun.contact_id.in_(list(valid)))))
+    stamp = utcnow().strftime("%Y%m%d%H%M%S")
+    pairs = [(c, f"manual:{stamp}:{secrets.token_hex(4)}") for c in ids
+             if c in valid and (w.allow_reentry or c not in previous)]
+    enrolled = enroll(db, w, pairs)  # also skips anyone still active in this workflow
+    return enrolled, len(ids) - enrolled
+
+
 def scan_triggers(db: Session) -> int:
     total = 0
     for w in list(db.scalars(select(Workflow).where(Workflow.status == "active"))):
@@ -120,10 +188,11 @@ def scan_triggers(db: Session) -> int:
 # ------------------------------------------------------------------ execution
 
 
-def _step(db: Session, run: WorkflowRun, node: dict, outcome: str, detail: str | None = None) -> None:
+def _step(db: Session, run: WorkflowRun, node: dict, outcome: str, detail: str | None = None,
+          meta: dict | None = None) -> None:
     db.add(WorkflowStep(organization_id=run.organization_id, application_id=run.application_id,
                         workflow_id=run.workflow_id, run_id=run.id, node_id=node["id"], node_type=node["type"],
-                        outcome=outcome, detail=(detail or "")[:1000] or None))
+                        outcome=outcome, detail=(detail or "")[:1000] or None, meta=meta or None))
 
 
 def _finish(run: WorkflowRun, status: str, reason: str | None = None) -> None:
@@ -220,6 +289,13 @@ def advance(db: Session, w: Workflow, run: WorkflowRun) -> None:
         elif t == "update_contact":
             _step(db, run, node, "done", _update_contact(db, w, node, contact))
             nxt = g.next(node["id"])
+        elif t == "crm_action":
+            from app.services.crm.automation import run_action
+
+            meta: dict = {}
+            detail = run_action(db, w.organization_id, w.application_id, data(node), contact, meta)
+            _step(db, run, node, "done", detail, meta)
+            nxt = g.next(node["id"])
         else:
             _step(db, run, node, "skipped", f"Unsupported step {t}")
             nxt = g.next(node["id"])
@@ -228,6 +304,121 @@ def advance(db: Session, w: Workflow, run: WorkflowRun) -> None:
             return _finish(run, "completed")
     run.status, run.wake_at = "waiting", utcnow()  # continue on the next tick
     return None
+
+
+# ------------------------------------------------------------------ dry run
+
+
+def _amount(node: dict) -> str:
+    d = data(node)
+    n, unit = d.get("amount") or 0, d.get("unit") or "hours"
+    return f"{n} {unit[:-1] if str(n) == '1' else unit}"
+
+
+def _send_preview(db: Session, node: dict, contact: Contact) -> tuple[str, str]:
+    from app.models.email import EmailTemplate
+    from app.models.voice import VoiceAudio
+
+    d, t = data(node), node["type"]
+    if t == "send_email":
+        tpl = db.get(EmailTemplate, d.get("template_id")) if d.get("template_id") else None
+        what = f"email “{(d.get('subject') or '').strip() or (tpl.name if tpl else 'no template chosen')}”"
+        if not contact.email:
+            return "would_skip", f"Would skip the {what}: no email address"
+        if contact.email_unsubscribed_at:
+            return "would_skip", f"Would skip the {what}: unsubscribed from email"
+        return "would_send", f"Would send {what} to {contact.email}"
+    if t == "send_sms":
+        body = (d.get("body") or "").strip()
+        what = f"SMS “{body[:60]}{'…' if len(body) > 60 else ''}”" if body else "SMS (no message yet)"
+        if not contact.phone:
+            return "would_skip", f"Would skip the {what}: no phone number"
+        if contact.sms_unsubscribed_at:
+            return "would_skip", f"Would skip the {what}: opted out of SMS"
+        return "would_send", f"Would send {what} to {contact.phone}"
+    audio = db.get(VoiceAudio, d.get("audio_id")) if d.get("audio_id") else None
+    what = f"call with “{audio.name}”" if audio else "call (no message chosen)"
+    if not contact.phone:
+        return "would_skip", f"Would skip the {what}: no phone number"
+    if contact.voice_unsubscribed_at:
+        return "would_skip", f"Would skip the {what}: opted out of calls"
+    return "would_send", f"Would place a {what} to {contact.phone}"
+
+
+def _update_preview(db: Session, node: dict) -> str:
+    d = data(node)
+    action = d.get("action")
+    if action in ("add_tag", "remove_tag"):
+        tag = db.get(Tag, d.get("tag_id")) if d.get("tag_id") else None
+        return f"Would {'add' if action == 'add_tag' else 'remove'} tag “{tag.name if tag else '?'}”"
+    if action in ("add_to_list", "remove_from_list"):
+        lst = db.get(ContactList, d.get("list_id")) if d.get("list_id") else None
+        return f"Would {'add to' if action == 'add_to_list' else 'remove from'} list “{lst.name if lst else '?'}”"
+    return "Nothing to change"
+
+
+def dry_run(db: Session, w: Workflow, graph: dict, contact: Contact) -> list[dict]:
+    """Walk `graph` for one contact without sending, enrolling or changing anything. Conditions are evaluated
+    against the contact's current data; engagement checks use what really happened, so in a test they
+    usually follow No (the earlier message was not actually sent)."""
+    from app.core.errors import ValidationFailed
+    from app.services.automation.graph import TRIGGER_NAMES
+    from app.services.crm.automation import preview_action
+
+    g = Graph.load(graph)
+    trig = g.trigger()
+    if trig is None:
+        return [{"node_id": None, "label": "Trigger", "outcome": "problem", "detail": "The workflow needs a trigger"}]
+    out = [{"node_id": trig["id"], "label": "Trigger", "outcome": "trigger",
+            "detail": f"{TRIGGER_NAMES.get(data(trig).get('kind'), 'Trigger')}: skipped for this test, the contact starts "
+                      "at the first step"}]
+    nid, seen = g.next(trig["id"]), {trig["id"]}
+    while nid and nid not in seen and len(out) <= MAX_STEPS_PER_TICK:
+        seen.add(nid)
+        node = g.nodes[nid]
+        t, nxt = node["type"], g.next(nid)
+        step = {"node_id": nid, "label": label(node)}
+        if t == "end":
+            step.update(outcome="end", detail="The journey ends")
+        elif t == "wait":
+            step.update(outcome="wait", detail=f"Would wait {_amount(node)}")
+        elif t in ("send_email", "send_sms", "voice_call"):
+            outcome, detail = _send_preview(db, node, contact)
+            step.update(outcome=outcome, detail=detail)
+        elif t == "condition":
+            d = data(node)
+            try:
+                yes = _condition(db, w, g, node, contact)
+                if (d.get("kind") or "rules") == "engagement":
+                    src = g.nodes.get(d.get("node_id") or "")
+                    why = (f"“{label(src) if src else 'the earlier step'}” was {d.get('event')}" if yes else
+                           f"“{label(src) if src else 'the earlier step'}” was not {d.get('event')} "
+                           "(nothing is sent in a test)")
+                else:
+                    why = "the contact matches the rules" if yes else "the contact doesn't match the rules"
+                step.update(outcome="branch_yes" if yes else "branch_no",
+                            detail=f"Condition → {'Yes' if yes else 'No'} because {why}")
+                nxt = g.next(nid, "yes" if yes else "no")
+            except (ValidationFailed, KeyError, TypeError):
+                step.update(outcome="problem", detail="This condition isn't set up yet")
+                nxt = None
+        elif t == "split":
+            pct = int(data(node).get("percent_a", 50) or 50)
+            step.update(outcome="branch_a", detail=f"Split: {pct}% go to A at random; this test follows path A")
+            nxt = g.next(nid, "a")
+        elif t == "update_contact":
+            step.update(outcome="would_do", detail=_update_preview(db, node))
+        elif t == "crm_action":
+            step.update(outcome="would_do",
+                        detail=preview_action(db, w.organization_id, w.application_id, data(node), contact))
+        else:
+            step.update(outcome="skipped", detail=f"Unsupported step {t}")
+        out.append(step)
+        nid = nxt
+    if nid and nid in seen:
+        out.append({"node_id": nid, "label": label(g.nodes[nid]), "outcome": "problem",
+                    "detail": "The workflow loops back on itself here"})
+    return out
 
 
 def process_runs(limit: int = RUN_BATCH) -> int:

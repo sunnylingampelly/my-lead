@@ -51,8 +51,7 @@ Configure only what you use. Admins can see which providers are configured under
 | --- | --- | --- |
 | Email (Brevo) | `BREVO_API_KEY`, `BREVO_WEBHOOK_TOKEN` | `/api/v1/webhooks/email/brevo?token=<BREVO_WEBHOOK_TOKEN>` |
 | Email (Amazon SES) | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | SNS subscription to `/api/v1/webhooks/email/ses` |
-| SMS India (MSG91) | `MSG91_AUTH_KEY`, `MSG91_WEBHOOK_TOKEN` | `/api/v1/webhooks/sms/msg91?token=…` and `/api/v1/webhooks/sms/msg91/inbound?token=…` |
-| SMS US (Twilio) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Messaging service inbound: `/api/v1/webhooks/sms/twilio/inbound` (status callbacks are set per message) |
+| SMS India and US (Amazon SNS) | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (or an IAM role), optional `AWS_ACCOUNT_ID` | Replies: SNS topic for two-way SMS subscribed to `/api/v1/webhooks/sms/sns`. Receipts: enable SNS delivery status logging; the app reads them from CloudWatch (needs `sns:Publish`, `logs:FilterLogEvents`, `sts:GetCallerIdentity`) |
 | Voice (Telnyx) | `TELNYX_API_KEY`, `TELNYX_ACCOUNT_SID`, `TELNYX_TEXML_APP_ID`, `TELNYX_PUBLIC_KEY` | Set per call automatically |
 | Voice (Exotel) | `EXOTEL_SID`, `EXOTEL_API_KEY`, `EXOTEL_API_TOKEN`, `EXOTEL_APP_ID`, `EXOTEL_WEBHOOK_TOKEN` | Set per call automatically |
 | Payments USD (Stripe) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `/api/v1/webhooks/payments/stripe` with events `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` |

@@ -48,6 +48,8 @@ export interface CampaignAudience {
   all?: boolean
   list_ids?: string[]
   segment_ids?: string[]
+  /** Explicit people (max 1,000), e.g. "resend to non-openers". */
+  contact_ids?: string[]
 }
 
 export interface Campaign {
@@ -93,18 +95,41 @@ export interface Estimate {
   excluded: Record<string, number>
 }
 
+/** Self-describing checklist item shared by email, SMS and voice. */
 export interface ReadinessCheck {
   key: string
   label: string
   ok: boolean
   detail: string | null
+  /** Editor step that fixes it. */
+  step?: string | null
+  /** Page outside the editor that fixes it. */
+  action_url?: string | null
+  action_label?: string | null
+  /** Requirement shown before the choice it depends on (e.g. no sender yet). */
+  pending?: boolean
+  meta?: Record<string, unknown> | null
+}
+
+export interface WalletInfo {
+  available: number
+  currency: string
 }
 
 export interface Readiness {
   ready: boolean
   checks: ReadinessCheck[]
   estimate: Estimate | null
+  cost?: { unit_price: number; currency: string; total: number }
+  wallet?: WalletInfo
   custom_keys: string[]
+}
+
+export interface RecipientIds {
+  contact_ids: string[]
+  total: number
+  truncated: boolean
+  limit: number
 }
 
 export interface Preview {

@@ -16,7 +16,12 @@ from app.core.config import settings
 from app.services.sms.rules import quiet_until
 
 LEGAL_WINDOW = {"IN": ("09:00", "21:00"), "US": ("08:00", "21:00")}
-DEFAULT_WINDOW = ("09:00", "20:00")
+# Other markets: the stricter of the two (same end time everywhere, so setup, settings and review agree).
+DEFAULT_WINDOW = ("09:00", "21:00")
+
+
+def window_for(country: str | None) -> tuple[str, str]:
+    return LEGAL_WINDOW.get(country or "", DEFAULT_WINDOW)
 OPT_OUT_DIGIT = "9"
 TOLL_FREE_US = ("800", "833", "844", "855", "866", "877", "888")
 LANGUAGES = {
@@ -68,7 +73,7 @@ def next_allowed(now_utc: datetime, tz_name: str | None, country: str | None, ca
     for _ in range(4):
         blocks = [quiet_until(at, tz_name, *quiet)]
         if category == "promotional":
-            start, end = LEGAL_WINDOW.get(country or "", DEFAULT_WINDOW)
+            start, end = window_for(country)
             blocks.append(quiet_until(at, tz_name, end, start))  # outside the window = "quiet"
         later = [b for b in blocks if b is not None]
         if not later:
@@ -87,8 +92,10 @@ def opt_out_prompt(language: str | None) -> str:
     return OPT_OUT_PROMPT.get(language or "", DEFAULT_OPT_OUT_PROMPT)
 
 
-def price_per_minute(country: str | None) -> tuple[float, str]:
-    t = settings.VOICE_PRICING.get(country or "", settings.VOICE_PRICING["default"])
+def price_per_minute(country: str | None, ai: bool = False) -> tuple[float, str]:
+    """Per started minute of an answered call. AI-agent calls have their own (higher) rate."""
+    table = settings.VOICE_AI_PRICING if ai else settings.VOICE_PRICING
+    t = table.get(country or "", table["default"])
     return float(t["per_minute"]), t["currency"]
 
 

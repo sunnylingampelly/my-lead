@@ -82,14 +82,14 @@ export function CreateOrganizationPage() {
             <optgroup label="Fully supported">
               {PRIMARY_COUNTRIES.map((c) => (
                 <option key={c.code} value={c.code}>
-                  {c.flag} {c.name}
+                  {c.name}
                 </option>
               ))}
             </optgroup>
             <optgroup label="Other (strictest defaults)">
               {OTHER_COUNTRIES.map((c) => (
                 <option key={c.code} value={c.code}>
-                  {c.flag} {c.name}
+                  {c.name}
                 </option>
               ))}
             </optgroup>
@@ -137,7 +137,7 @@ export function CreateApplicationPage() {
   return (
     <AuthLayout
       title={first ? 'Create your first application' : `New application in ${org.name}`}
-      subtitle="Each application has its own contacts, campaigns, analytics and settings."
+      subtitle="An application is one brand or product with its own contacts, campaigns and settings. You can add more later."
     >
       {first && <Steps step={2} />}
       {!org.permissions.includes('apps.create') ? (
@@ -145,6 +145,7 @@ export function CreateApplicationPage() {
       ) : (
         <ApplicationForm
           defaultValues={{ default_country: org.country ?? browserCountry() ?? 'IN' }}
+          compactTimezone
           submitLabel="Create application"
           onSubmit={async (values) => {
             const app = await appApi.create({ ...values, organization_id: org.id })

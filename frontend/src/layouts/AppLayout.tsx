@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Link, Outlet, useLocation } from 'react-router-dom'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { ErrorState, FullPageSpinner } from '@/components/page'
 import { TopProgress } from '@/components/TopProgress'
 import { Button } from '@/components/ui/button'
 import { WorkspaceProvider, useWorkspace } from '@/hooks/useWorkspace'
-import { ApiError } from '@/api/client'
+import { ApiError, setAddCreditHandler, setUpgradeHandler } from '@/api/client'
 import { cn } from '@/lib/utils'
 import { CommandPalette } from './CommandPalette'
 import { ShortcutsDialog, useGlobalShortcuts } from './Shortcuts'
@@ -26,10 +26,23 @@ function Shell() {
       return false
     }
   })
-  const { loading, appError } = useWorkspace()
+  const { loading, appError, org } = useWorkspace()
   const location = useLocation()
+  const navigate = useNavigate()
+  // "Add credit" on out-of-credit error toasts opens this organization's billing page with the top-up dialog.
+  useEffect(() => {
+    if (!org) return
+    setAddCreditHandler(() => navigate(`/orgs/${org.id}/billing?topup=1`))
+    setUpgradeHandler(() => navigate(`/orgs/${org.id}/billing#plan`))
+    return () => {
+      setAddCreditHandler(null)
+      setUpgradeHandler(null)
+    }
+  }, [org, navigate])
   // The workflow builder uses the whole content area for its canvas.
   const fullBleed = /\/automation\/[^/]+$/.test(location.pathname)
+  // The deals board is a wide kanban; let it use the whole width.
+  const wide = /\/crm\/deals$/.test(location.pathname)
 
   const toggleSidebar = () =>
     setCollapsed((c) => {
@@ -77,7 +90,7 @@ function Shell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onMenu={() => setMobileNav(true)} onSearch={() => setPalette(true)} onShortcuts={() => setHelp(true)} />
         <SupportBanner />
-        <main id="main" className={cn('mx-auto w-full flex-1', fullBleed ? 'p-0' : 'max-w-[1400px] px-4 py-6 sm:px-8 sm:py-8')}>
+        <main id="main" className={cn('mx-auto w-full flex-1', fullBleed ? 'p-0' : cn(!wide && 'max-w-[1400px]', 'px-4 py-6 sm:px-8 sm:py-8'))}>
           {loading ? (
             <FullPageSpinner />
           ) : appError ? (

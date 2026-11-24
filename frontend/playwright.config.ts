@@ -10,7 +10,7 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
-  // The development backend uses SQLite (one writer at a time), so run browsers one by one.
+  // Browsers run one by one so tests that share seeded accounts don't interfere.
   workers: 1,
   retries: 0,
   reporter: [['list']],

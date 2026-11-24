@@ -1,4 +1,4 @@
-"""Voice end to end: caller rules, calling windows, audio library, calling, retries, press-9 opt-out,
+"""Voice end to end: number rules, calling windows, audio library, calling, retries, press-9 opt-out,
 signed callbacks and access control."""
 import io
 import json
@@ -14,14 +14,13 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models import ApplicationSettings, Contact
 from app.models.voice import VoiceCall, VoiceCampaign
-from app.providers.sms.twilio import twilio_signature
 from app.providers.voice.base import CallScript, ScriptStep
 from app.providers.voice.simulation import call_log_path
-from app.providers.voice.twilio import twiml
+from app.providers.voice.twilio import twilio_signature, twiml
 from app.services.email import tokens
 from app.services.email.render import public_url
 from app.services.voice import engine, rules
-from tests.conftest import Api, invite_and_join
+from tests.conftest import Api, invite_and_join, make_pro
 
 
 def wav_bytes(seconds: float = 2.0) -> bytes:
@@ -101,18 +100,14 @@ def india(owner, monkeypatch):
 
 def ready_india(a, category: str = "promotional") -> dict:
     a.put(f"{a.base}/sms/registration", json={"principal_entity_id": "1101456789012345678", "attest": True})
-    kind, number = ("series_140", "+911401234567") if category == "promotional" else ("series_160", "+911601234567")
-    c = a.post(f"{a.v}/callers", json={"number": number, "country": "IN", "kind": kind})
-    assert c.status_code == 201 and c.json()["status"] == "pending", c.text
-    a.caller_id = c.json()["id"]
-    assert a.post(f"{a.v}/callers/{a.caller_id}/attest").json()["status"] == "active"
+    # No caller to choose: Signalcraft picks a managed number for every call.
     t = a.post(f"{a.v}/audio/tts", json={"name": "Diwali", "tts_text": "Namaste {{first_name}}, our Diwali sale starts "
                                                                        "today with fifty percent off.",
                                          "tts_language": "en-IN"})
     assert t.status_code == 201 and float(t.json()["duration_seconds"]) > 3, t.text
     camp = a.post(f"{a.v}/campaigns", json={"name": "Diwali calls", "category": category,
                                            "audio_id": t.json()["id"]}).json()
-    assert camp["caller_ref"] == a.caller_id and camp["intro_text"].startswith("Hello, this is a call from")
+    assert camp["caller_ref"] is None and camp["intro_text"].startswith("Hello, this is a call from")
     r = a.patch(f"{a.v}/campaigns/{camp['id']}", json={"audience": {"all": True}})
     assert r.status_code == 200, r.text
     return r.json()
@@ -144,15 +139,15 @@ def test_audio_upload_validation_and_signed_playback(india):
 
 # ------------------------------------------------------------------ calling
 
-def test_readiness_blocks_wrong_series_and_missing_registration(india):
+def test_readiness_blocks_missing_registration_and_message(india):
     a = india
-    bad = a.post(f"{a.v}/callers", json={"number": "+919876543210", "country": "IN", "kind": "series_140"})
-    assert bad.status_code == 422 and bad.json()["error"]["code"] == "INVALID_CALLER_ID"
-    c = a.post(f"{a.v}/callers", json={"number": "+911601234567", "country": "IN", "kind": "series_160"}).json()
     camp = a.post(f"{a.v}/campaigns", json={"name": "Promo"}).json()
-    a.patch(f"{a.v}/campaigns/{camp['id']}", json={"caller_ref": c["id"], "audience": {"all": True}})
+    a.patch(f"{a.v}/campaigns/{camp['id']}", json={"audience": {"all": True}})
     rd = a.get(f"{a.v}/campaigns/{camp['id']}/readiness").json()
-    assert {ch["key"] for ch in rd["checks"] if not ch["ok"]} == {"caller", "registration", "category", "message"}
+    # No caller step: the platform check passes in simulation, registration and message are missing.
+    assert {ch["key"] for ch in rd["checks"] if not ch["ok"]} == {"registration", "message"}
+    calling = next(ch for ch in rd["checks"] if ch["key"] == "calling")
+    assert calling["ok"] and calling["label"] == "Signalcraft can place promotional calls to India"
     assert rd["estimate"]["eligible"] == 5 and rd["estimate"]["excluded"]["no_consent"] == 1
     assert a.post(f"{a.v}/campaigns/{camp['id']}/send").json()["error"]["code"] == "CAMPAIGN_NOT_READY"
 
@@ -191,6 +186,9 @@ def test_campaign_outcomes_retry_opt_out_and_cost(india):
     rep = a.get(f"{a.v}/campaigns/{c['id']}/report").json()
     assert rep["outcomes"] == {"answered": 2, "voicemail": 1, "no_answer": 1, "busy": 1, "failed": 0}
     assert rep["rates"]["answer_rate"] == pytest.approx(40.0) and rep["simulated"]
+    # Every call came from a Signalcraft 140-series number, the same one for the same person.
+    calls = a.get(f"{a.v}/campaigns/{c['id']}/calls").json()["items"]
+    assert all(x["from_number"] and x["from_number"].startswith("+91140") for x in calls if x["attempts"])
     opted = a.get(f"{a.v}/campaigns/{c['id']}/calls?status=opted_out").json()
     assert opted["total"] == 1 and opted["items"][0]["to_phone"] == "+919876599999"
     assert a.patch(f"{a.v}/campaigns/{c['id']}", json={"name": "x"}).status_code == 409
@@ -236,9 +234,6 @@ def us(owner, monkeypatch):
 
 def test_us_tcpa_checks_and_twilio_callbacks(us, monkeypatch):
     a = us
-    c = a.post(f"{a.v}/callers", json={"number": "+14155550100", "country": "US", "kind": "local",
-                                       "provider": "twilio"}).json()
-    a.post(f"{a.v}/callers/{c['id']}/attest")
     t = a.post(f"{a.v}/audio/tts", json={"name": "Sale", "tts_text": "Spring sale ends Sunday.", "tts_language": "en-US"})
     camp = a.post(f"{a.v}/campaigns", json={"name": "Spring", "audio_id": t.json()["id"]}).json()
     a.patch(f"{a.v}/campaigns/{camp['id']}", json={"intro_text": "", "opt_out_keypress": False,
@@ -302,8 +297,8 @@ def test_permissions_and_isolation(india):
     c = ready_india(a)
     viewer = invite_and_join(a, "viewer@example.com", "viewer", [a.app_id])
     assert viewer.get(f"{a.v}/campaigns").status_code == 200
-    assert viewer.post(f"{a.v}/callers", json={"number": "+911401111111", "country": "IN",
-                                               "kind": "series_140"}).status_code == 403
+    # Customers have no phone-number endpoints at all.
+    assert a.get(f"{a.v}/numbers").status_code == 404 and a.post(f"{a.v}/callers", json={}).status_code in (404, 405)
     assert viewer.post(f"{a.v}/audio/tts", json={"name": "x", "tts_text": "hello"}).status_code == 403
     assert viewer.post(f"{a.v}/campaigns/{c['id']}/send").status_code == 403
     other = Api().register("other@example.com", "Other")
@@ -349,12 +344,8 @@ def test_telnyx_request_callbacks_and_signature(us, monkeypatch):
     assert sent["body"]["ApplicationSid"] == "1293384261075731499" and "<Say" in sent["body"]["Texml"]
     assert sent["body"]["StatusCallback"] == "https://x.test/cb"
 
-    # A campaign whose caller uses Telnyx; in simulation mode no request is made.
+    # A campaign (in simulation mode no request is made); the callback flow is exercised below.
     a = us
-    c = a.post(f"{a.v}/callers", json={"number": "+14155550100", "country": "US", "kind": "local",
-                                       "provider": "telnyx"}).json()
-    assert c["provider"] == "telnyx"
-    a.post(f"{a.v}/callers/{c['id']}/attest")
     t = a.post(f"{a.v}/audio/tts", json={"name": "Note", "tts_text": "Your order shipped.", "tts_language": "en-US"})
     camp = a.post(f"{a.v}/campaigns", json={"name": "Ship", "category": "transactional",
                                            "audio_id": t.json()["id"]}).json()
@@ -393,3 +384,55 @@ def test_telnyx_request_callbacks_and_signature(us, monkeypatch):
     with SessionLocal() as db:
         call = db.get(VoiceCall, call_id)
         assert call.status == "completed" and call.duration_seconds == 42 and call.provider_call_id == "v3:real"
+
+
+# ------------------------------------------------------------------ first-send guidance (UX fixes)
+
+def test_calling_window_and_currency_follow_the_app_market(owner):
+    assert rules.DEFAULT_WINDOW[1] == "21:00" and rules.window_for("IN") == ("09:00", "21:00")
+    assert rules.window_for("US") == ("08:00", "21:00")
+    make_pro(owner.org["id"])  # two more applications than Starter allows
+    for country, window, currency in (("IN", ["09:00", "21:00"], "INR"), ("US", ["08:00", "21:00"], "USD")):
+        app = owner.post("/applications", json={"organization_id": owner.org["id"], "name": f"Voice {country}",
+                                                 "default_country": country,
+                                                 "timezone": "Asia/Kolkata" if country == "IN" else
+                                                 "America/New_York"}).json()
+        v = f"/apps/{app['id']}/voice"
+        c = owner.post(f"{v}/campaigns", json={"name": "First calls"}).json()
+        rd = owner.get(f"{v}/campaigns/{c['id']}/readiness").json()
+        assert rd["country"] == country and "caller_chosen" not in rd
+        assert list(rd["window"]) == window and rd["cost"]["currency"] == currency
+        hours = rd["calling_hours"]["window"]
+        # Default quiet hours match the market's legal window, so review, setup and settings agree.
+        assert [hours["start"], hours["end"]] == window and "narrowed" not in hours["reason"]
+        assert ("India" if country == "IN" else "United States") in hours["reason"]
+        # Stricter quiet hours narrow the window, and the reason says so.
+        owner.patch(f"/applications/{app['id']}/settings", json={"quiet_hours_start": "20:00",
+                                                                  "quiet_hours_end": "10:00"})
+        hours = owner.get(f"{v}/campaigns/{c['id']}/readiness").json()["calling_hours"]["window"]
+        assert (hours["start"], hours["end"]) == ("10:00", "20:00") and "narrowed by your quiet hours" in hours["reason"]
+        checks = {ch["key"]: ch for ch in rd["checks"]}
+        assert "caller" not in checks and checks["calling"]["ok"]
+        if country == "IN":
+            assert checks["registration"]["action_url"] == f"/apps/{app['id']}/voice/registration"
+            assert "category" not in checks
+        else:
+            assert "registration" not in checks
+
+
+def test_calls_waiting_for_the_calling_window(india, monkeypatch):
+    a = india
+    c = ready_india(a)
+    rd = a.get(f"{a.v}/campaigns/{c['id']}/readiness").json()
+    assert rd["calling_hours"]["waiting"] == 0
+    # Close the legal window around now: everyone reachable would wait.
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    start = (now + timedelta(hours=1)).strftime("%H:%M")
+    end = (now + timedelta(hours=2)).strftime("%H:%M")
+    monkeypatch.setattr(rules, "LEGAL_WINDOW", {"IN": (start, end), "US": (start, end)})
+    rd = a.get(f"{a.v}/campaigns/{c['id']}/readiness").json()
+    assert rd["calling_hours"]["waiting"] == 5 and rd["calling_hours"]["next_window_at"]
+    ids = a.get(f"{a.v}/campaigns/{c['id']}/recipients/ids").json()
+    assert ids["total"] == 0  # nothing called yet

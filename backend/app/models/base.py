@@ -1,8 +1,10 @@
 """Declarative base, portable column types and common mixins."""
+import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, MetaData, String, TypeDecorator
+from sqlalchemy import DateTime, MetaData, String, Text, TypeDecorator
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.utils.time import utcnow
@@ -65,3 +67,20 @@ class SoftDeleteMixin:
     @property
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
+
+
+class JSONText(TypeDecorator):
+    """JSON kept as text (LONGTEXT on MySQL). For deeply nested documents such as the visual email
+    editor's design: MariaDB's JSON check rejects nesting deeper than 32 levels."""
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        return dialect.type_descriptor(LONGTEXT() if dialect.name == "mysql" else Text())
+
+    def process_bind_param(self, value, dialect):
+        return None if value is None else json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+    def process_result_value(self, value, dialect):
+        return None if value is None else json.loads(value)

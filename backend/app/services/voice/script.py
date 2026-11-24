@@ -1,7 +1,7 @@
 """What a call says: business identification, the message (recording or text-to-speech) and the
 opt-out prompt. Built from the snapshot frozen at launch, personalised per contact."""
 from app.core.config import settings
-from app.providers.voice.base import CallScript, ScriptStep
+from app.providers.voice.base import AgentRelay, CallScript, ScriptStep
 from app.services.email import render, tokens
 from app.services.voice import rules
 from app.services.voice.library import audio_url
@@ -22,7 +22,23 @@ def snapshot_message(audio, caller, campaign) -> dict:
     }
 
 
+def snapshot_agent(agent, caller, campaign, business_name: str) -> dict:
+    """AI-agent campaigns: the agent (version and behaviour) and caller frozen at launch."""
+    from app.services.voice.agents import snapshot as agent_snapshot
+
+    return {
+        "message_type": "ai_agent", "caller_number": caller.number, "country": caller.country, "kind": caller.kind,
+        "provider": caller.provider, "agent": agent_snapshot(agent), "agent_id": agent.id,
+        "agent_version": agent.version, "agent_name": agent.name, "language": agent.language, "voice": agent.voice,
+        "business_name": business_name, "intro_text": None,
+        # Pressing 9 during the conversation always opts out.
+        "opt_out_keypress": True,
+    }
+
+
 def build(snap: dict, contact, call_id: str | None, sample: bool = False) -> CallScript:
+    if snap.get("message_type") == "ai_agent":
+        return build_agent(snap, contact, call_id, sample)
     values = render.contact_values(contact, sample=sample)
     lang, voice = snap.get("language"), snap.get("voice")
     steps = []
@@ -42,6 +58,18 @@ def build(snap: dict, contact, call_id: str | None, sample: bool = False) -> Cal
     return CallScript(steps=tuple(steps), gather_digit_url=gather_url, gather_prompt=prompt)
 
 
+def build_agent(snap: dict, contact, call_id: str | None, sample: bool = False) -> CallScript:
+    from app.services.voice import ai, relay
+
+    agent = snap.get("agent") or {}
+    values = ai.values_for("Asha" if sample and contact is None else None, snap.get("business_name") or "us", contact)
+    greeting = ai.greeting_for(agent, values)
+    lang, voice = agent.get("language") or snap.get("language"), agent.get("voice") or snap.get("voice")
+    rel = AgentRelay(url=relay.ws_url(call_id), greeting=greeting, language=lang, voice=voice,
+                     action_url=relay.action_url(call_id)) if call_id else None
+    return CallScript(steps=(ScriptStep("say", text=greeting, language=lang, voice=voice),), relay=rel)
+
+
 def as_text(script: CallScript) -> list[dict]:
     out = [{"kind": s.kind, "text": s.text, "url": s.url} for s in script.steps]
     if script.gather_prompt:
@@ -50,6 +78,8 @@ def as_text(script: CallScript) -> list[dict]:
 
 
 def estimated_seconds(snap: dict) -> float:
+    if snap.get("message_type") == "ai_agent":
+        return float(settings.AI_CALL_EXPECTED_MINUTES * 60)
     total = rules.spoken_seconds(snap.get("intro_text") or "")
     total += snap.get("audio_seconds") or 0
     if snap.get("opt_out_keypress"):

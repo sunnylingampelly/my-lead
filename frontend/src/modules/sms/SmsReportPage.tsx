@@ -18,6 +18,7 @@ import { Pagination } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount, formatPhone } from '@/lib/regions'
 import { cn, formatDateTime, timeAgo } from '@/lib/utils'
+import { RecipientActions } from '../email/recipientActions'
 import { CampaignStatusBadge, pct } from '../email/components'
 import { CATEGORY_LABEL, COUNTRY_FLAG, formatMoney } from './format'
 
@@ -45,6 +46,8 @@ const FILTERS = [
   ['delivered', 'Delivered'],
   ['undelivered', 'Undelivered'],
   ['failed', 'Failed'],
+  ['replied', 'Replied'],
+  ['opted_out', 'Opted out (STOP)'],
   ['deferred', 'Deferred'],
   ['skipped', 'Skipped'],
   ['queued', 'Queued'],
@@ -61,7 +64,7 @@ const BADGE: Record<string, 'success' | 'warning' | 'destructive' | 'secondary' 
   skipped: 'warning',
 }
 
-function Recipients({ campaignId, currency }: { campaignId: string; currency: string | null }) {
+function Recipients({ campaignId, campaignName, currency }: { campaignId: string; campaignName: string; currency: string | null }) {
   const { app } = useWorkspace()
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
@@ -74,11 +77,14 @@ function Recipients({ campaignId, currency }: { campaignId: string; currency: st
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recipients</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Recipients</CardTitle>
+          <RecipientActions channel="sms" campaignId={campaignId} campaignName={campaignName} status={status} tabLabel={FILTERS.find(([k]) => k === status)?.[1] ?? 'All'} count={q.data?.total ?? 0} />
+        </div>
         <CardDescription>Every text and its latest delivery receipt.</CardDescription>
       </CardHeader>
       <div className="flex flex-wrap items-center gap-2 border-y p-3">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex max-w-full gap-1 overflow-x-auto">
           {FILTERS.map(([k, label]) => (
             <button
               key={k}
@@ -86,7 +92,7 @@ function Recipients({ campaignId, currency }: { campaignId: string; currency: st
                 setStatus(k)
                 setPage(1)
               }}
-              className={cn('rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
+              className={cn('shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
             >
               {label}
             </button>
@@ -334,13 +340,13 @@ export function SmsReportPage() {
               <Kpi label="Cost" value={formatMoney(st.cost, camp.currency)} sub={camp.estimated_cost ? `Estimated ${formatMoney(camp.estimated_cost, camp.currency)}` : undefined} help="Parts accepted by the provider × the per-part price. Simulated campaigns are not charged." />
             </div>
           )}
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle>Sent and delivered</CardTitle>
                 <CardDescription>Per {rep.data?.timeline.granularity ?? 'hour'}, in your local time.</CardDescription>
               </CardHeader>
-              <CardContent className="h-64">
+              <CardContent className="h-64 overflow-hidden">
                 {rep.data?.timeline.points.length ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={rep.data.timeline.points.map((p) => ({ ...p, label: new Date(p.at).toLocaleString(undefined, rep.data!.timeline.granularity === 'hour' ? { hour: 'numeric', day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short' }) }))}>
@@ -381,7 +387,7 @@ export function SmsReportPage() {
               </CardContent>
             </Card>
           </div>
-          <Recipients campaignId={camp.id} currency={camp.currency} />
+          <Recipients campaignId={camp.id} campaignName={camp.name} currency={camp.currency} />
         </div>
       )}
 

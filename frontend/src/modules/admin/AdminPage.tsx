@@ -17,6 +17,7 @@ import { Pagination, StatCard } from '@/components/audience'
 import { useUser } from '@/hooks/useAuth'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
 import { formatMoney } from '../sms/format'
+import { PhoneNumberPool } from './PhoneNumberPool'
 
 const TABS = [
   ['overview', 'Overview'],
@@ -24,6 +25,7 @@ const TABS = [
   ['users', 'Users'],
   ['support', 'Support access'],
   ['staff', 'Platform staff'],
+  ['numbers', 'Phone numbers'],
   ['webhooks', 'Webhooks'],
   ['settings', 'Settings'],
 ] as const
@@ -769,6 +771,7 @@ export function AdminPage() {
       {tab === 'users' && <UsersTab />}
       {tab === 'support' && <SupportTab />}
       {tab === 'staff' && <StaffTab />}
+      {tab === 'numbers' && <PhoneNumberPool />}
       {tab === 'webhooks' && <Webhooks />}
       {tab === 'settings' && <SettingsTab />}
     </>

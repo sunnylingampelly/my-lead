@@ -6,7 +6,9 @@ import type {
   ApplicationSettings,
   AuditLog,
   AuthResponse,
+  ChecklistItem,
   DashboardData,
+  ProvidersStatus,
   Invitation,
   InvitationPreview,
   MailboxItem,
@@ -100,6 +102,8 @@ export const appApi = {
     data(http.post(`/applications/${id}/members`, body)),
   removeMember: (id: string, userId: string) => data(http.delete(`/applications/${id}/members/${userId}`)),
   dashboard: (id: string) => data(http.get<DashboardData>(`/apps/${id}/dashboard`)),
+  checklist: (id: string) => data(http.get<ChecklistItem[]>(`/apps/${id}/dashboard/checklist`)),
+  providersStatus: (id: string) => data(http.get<ProvidersStatus>(`/apps/${id}/providers/status`)),
 }
 
 export const devApi = {

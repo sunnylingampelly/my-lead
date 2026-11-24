@@ -8,6 +8,7 @@ import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, FullPageSpinner, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, Input, Select, Textarea } from '@/components/ui/form-controls'
 import { Badge } from '@/components/ui/misc'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
@@ -16,7 +17,7 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { downloadFile } from '@/lib/download'
 import { countryFlag, countryName, formatCount } from '@/lib/regions'
 import { cn, formatDateTime } from '@/lib/utils'
-import type { ImportJob, ImportOptions, ImportValidation } from '@/types/audience'
+import type { Attribute, ImportJob, ImportOptions, ImportValidation } from '@/types/audience'
 
 const STEPS = ['Upload', 'Map columns', 'Validate', 'Configure', 'Import', 'Report']
 
@@ -26,7 +27,7 @@ const CORE_TARGETS: [string, string][] = [
   ['last_name', 'Last name'],
   ['email', 'Email'],
   ['phone', 'Phone'],
-  ['company', 'Company'],
+  ['company', 'Company (links to a CRM company)'],
   ['city', 'City'],
   ['state', 'State'],
   ['country', 'Country'],
@@ -34,7 +35,102 @@ const CORE_TARGETS: [string, string][] = [
   ['source', 'Source'],
   ['timezone', 'Timezone'],
   ['tags', 'Tags (comma separated)'],
+  ['owner_email', 'Owner (team member email)'],
+  ['lifecycle_stage', 'Lifecycle stage'],
 ]
+const NEW_FIELD = '__new_field__'
+
+const SAMPLE_CSV = [
+  'first_name,last_name,email,phone,company,city,country,tags,owner_email,lifecycle_stage',
+  'Asha,Rao,asha.rao@example.com,+919876543210,Acme Traders,Mumbai,IN,"vip,festive",,lead',
+  'Jordan,Lee,jordan.lee@example.com,+15125550147,Globex Inc,Austin,US,webinar,,mql',
+].join('\r\n')
+
+function downloadSample() {
+  const url = URL.createObjectURL(new Blob(['\ufeff' + SAMPLE_CSV + '\r\n'], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'contacts-sample.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const slug = (v: string) =>
+  v
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^[^a-z]+/, '')
+    .replace(/_+$/, '')
+    .slice(0, 60)
+
+/** Create a custom field without leaving the import. Resolves with its key, or null. */
+function NewFieldDialog({ column, onDone }: { column: string | null; onDone: (key: string | null) => void }) {
+  const { app } = useWorkspace()
+  const qc = useQueryClient()
+  const [label, setLabel] = useState('')
+  const [type, setType] = useState<Attribute['data_type']>('text')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (column !== null) {
+      setLabel(column)
+      setType('text')
+    }
+  }, [column])
+  const key = slug(label)
+  const save = async () => {
+    setBusy(true)
+    try {
+      const a = await audienceApi(app!.id).createAttribute({ key, label: label.trim(), data_type: type, options: [] })
+      await qc.invalidateQueries({ queryKey: aqk.attributes(app!.id) })
+      await qc.invalidateQueries({ queryKey: aqk.fields(app!.id) })
+      toast.success(`Custom field “${a.label}” created`)
+      onDone(a.key)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open={column !== null} onOpenChange={(o) => !o && !busy && onDone(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New custom field</DialogTitle>
+          <DialogDescription>For the “{column}” column. It is added to every contact in this application.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (key) void save()
+          }}
+        >
+          <Field label="Field name" htmlFor="nf-label" hint={key ? `Key: ${key}` : 'Start with a letter.'}>
+            <Input id="nf-label" autoFocus value={label} maxLength={100} onChange={(e) => setLabel(e.target.value)} />
+          </Field>
+          <Field label="Type" htmlFor="nf-type">
+            <Select id="nf-type" value={type} onChange={(e) => setType(e.target.value as Attribute['data_type'])}>
+              <option value="text">Text</option>
+              <option value="number">Number</option>
+              <option value="date">Date</option>
+              <option value="boolean">Yes / no</option>
+            </Select>
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onDone(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={busy} disabled={!key}>
+              Create field
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function Stepper({ step }: { step: number }) {
   return (
@@ -129,6 +225,12 @@ function UploadStep() {
             <strong className="text-foreground">Consent:</strong> imported contacts have no marketing consent unless you confirm it in step 4.
           </p>
         </div>
+        <p className="mt-4 text-sm">
+          <button type="button" onClick={downloadSample} className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline">
+            <Download className="size-4" /> Download sample CSV
+          </button>
+          <span className="text-muted-foreground"> with every column we recognise, including owner and lifecycle stage.</span>
+        </p>
       </CardContent>
     </Card>
   )
@@ -141,6 +243,7 @@ function MapStep({ imp, onValidated }: { imp: ImportJob; onValidated: (m: Record
     Object.keys(imp.mapping ?? {}).length ? imp.mapping : imp.suggested_mapping,
   )
   const [busy, setBusy] = useState(false)
+  const [newFor, setNewFor] = useState<string | null>(null)
   const used = useMemo(() => new Set(Object.values(mapping).filter(Boolean)), [mapping])
 
   const validate = async () => {
@@ -160,11 +263,8 @@ function MapStep({ imp, onValidated }: { imp: ImportJob; onValidated: (m: Record
       <CardHeader>
         <CardTitle>Map columns to contact fields</CardTitle>
         <CardDescription>
-          {imp.file_name} · {formatCount(imp.total_rows, app!.default_country)} rows. Unmapped columns are ignored.{' '}
-          <Link to={`/apps/${app!.id}/audience/fields`} className="text-primary hover:underline" target="_blank">
-            Create a custom field
-          </Link>{' '}
-          for extra columns, then refresh this list.
+          {imp.file_name} · {formatCount(imp.total_rows, app!.default_country)} rows. Unmapped columns are ignored. For extra columns choose
+          “+ New custom field…” in the list.
         </CardDescription>
       </CardHeader>
       <Table>
@@ -187,7 +287,11 @@ function MapStep({ imp, onValidated }: { imp: ImportJob; onValidated: (m: Record
                   .join(' · ') || '—'}
               </TD>
               <TD>
-                <Select aria-label={`Map ${col}`} value={mapping[col] ?? ''} onChange={(e) => setMapping((m) => ({ ...m, [col]: e.target.value }))}>
+                <Select
+                  aria-label={`Map ${col}`}
+                  value={mapping[col] ?? ''}
+                  onChange={(e) => (e.target.value === NEW_FIELD ? setNewFor(col) : setMapping((m) => ({ ...m, [col]: e.target.value })))}
+                >
                   <option value="">Do not import</option>
                   <optgroup label="Contact fields">
                     {CORE_TARGETS.map(([k, label]) => (
@@ -205,12 +309,20 @@ function MapStep({ imp, onValidated }: { imp: ImportJob; onValidated: (m: Record
                       ))}
                     </optgroup>
                   )}
+                  <option value={NEW_FIELD}>+ New custom field…</option>
                 </Select>
               </TD>
             </TR>
           ))}
         </TBody>
       </Table>
+      <NewFieldDialog
+        column={newFor}
+        onDone={(key) => {
+          if (key && newFor) setMapping((m) => ({ ...m, [newFor]: `attr:${key}` }))
+          setNewFor(null)
+        }}
+      />
       <CardFooter>
         <Button onClick={validate} loading={busy} disabled={!used.has('email') && !used.has('phone')}>
           Validate {formatCount(imp.total_rows, app!.default_country)} rows
@@ -300,6 +412,7 @@ function ConfigureStep({ imp, mapping, v, onBack }: { imp: ImportJob; mapping: R
     new_list_name: '',
     tag_names: [],
     source: 'import',
+    create_companies: false,
     consent: { email: false, sms: false, voice: false, source: '', evidence: '', consent_reference: '', confirmed: false },
   })
   const [listMode, setListMode] = useState<'none' | 'existing' | 'new'>('none')
@@ -369,6 +482,17 @@ function ConfigureStep({ imp, mapping, v, onBack }: { imp: ImportJob; mapping: R
           <Field label="Source label" htmlFor="srcl" hint="Stored on new contacts, e.g. 'trade-show-mumbai'.">
             <Input id="srcl" value={opts.source ?? ''} onChange={(e) => setOpts((o) => ({ ...o, source: e.target.value }))} />
           </Field>
+          {Object.values(mapping).includes('company') && (
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox className="mt-0.5" checked={!!opts.create_companies} onChange={(e) => setOpts((o) => ({ ...o, create_companies: e.target.checked }))} />
+              <span>
+                Create companies from company names
+                <span className="block text-xs text-muted-foreground">
+                  Names matching an existing CRM company (or its email domain) are always linked. Tick this to also create the missing ones.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="rounded-lg border bg-muted/30 p-4">

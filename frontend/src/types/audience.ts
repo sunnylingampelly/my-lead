@@ -30,6 +30,11 @@ export interface ContactListItem {
   tags: TagRef[]
   created_at: string
   last_activity_at: string | null
+  company_id?: string | null
+  owner_id?: string | null
+  owner_name?: string | null
+  lifecycle_stage?: string | null
+  lead_score?: number
 }
 
 export interface ContactDetail extends ContactListItem {
@@ -56,6 +61,10 @@ export interface ContactFilters {
   segment_id?: string
   eligible_for?: Channel | ''
   country?: string
+  /** A user id, "me" or "unassigned". */
+  owner_id?: string
+  lifecycle_stage?: string
+  min_lead_score?: number | ''
 }
 
 export interface ConsentInput {
@@ -84,6 +93,10 @@ export interface ContactInput {
   list_ids?: string[]
   consent?: ConsentInput
   status?: ContactStatus
+  company_id?: string | null
+  owner_id?: string | null
+  lifecycle_stage?: string | null
+  clear_owner?: boolean
 }
 
 export interface Attribute {
@@ -147,6 +160,8 @@ export interface FieldDef {
   group: string
   operators: string[]
   options?: string[]
+  /** Display names for option values that are ids (owners, pipeline stages). */
+  option_labels?: Record<string, string>
 }
 
 export interface FieldCatalog {
@@ -212,6 +227,7 @@ export interface ImportOptions {
   tag_names: string[]
   source?: string | null
   consent: ConsentInput & { confirmed: boolean }
+  create_companies?: boolean
 }
 
 export interface Activity {

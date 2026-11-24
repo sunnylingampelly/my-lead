@@ -8,7 +8,7 @@ import hmac
 import json
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import select
 
@@ -19,7 +19,7 @@ from app.core.errors import NotFound, Unauthorized
 from app.models import Contact
 from app.models.email import WebhookEvent
 from app.models.voice import VoiceCall, VoiceCampaign
-from app.providers.sms.twilio import verify_twilio
+from app.providers.voice.twilio import verify_twilio
 from app.services.email import tokens
 from app.services.email.render import public_url
 from app.services.voice import events, library, rules, script
@@ -140,6 +140,57 @@ async def exotel_status(request: Request, db: DB, token: str = ""):
     _store(db, "voice_exotel", f"{sid}:{st}", {"call_id": sid, "status": st,
                                                "duration": str(f.get("ConversationDuration") or f.get("Duration") or "")})
     return {"received": True}
+
+
+# ------------------------------------------------------------------ AI agents (Twilio ConversationRelay)
+
+
+@router.websocket("/public/voice/agent/{call_id}/ws")
+async def agent_socket(websocket: WebSocket, call_id: str, token: str = ""):
+    """ConversationRelay WebSocket for one AI-agent call. The token is an HMAC bound to the call id."""
+    from app.services.voice import relay
+
+    if not relay.verify(call_id, token):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+
+    async def receive() -> dict | None:
+        try:
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            return None
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            return {}
+        return msg if isinstance(msg, dict) else {}
+
+    async def send(msg: dict) -> None:
+        try:
+            await websocket.send_text(json.dumps(msg))
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+
+    await relay.RelaySession(call_id, receive, send).run()
+    try:
+        await websocket.close()
+    except RuntimeError:
+        pass
+
+
+@router.post("/public/voice/agent/{call_id}/action", include_in_schema=False)
+async def agent_action(call_id: str, request: Request, token: str = ""):
+    """<Connect action>: after the conversation, dial the agent's transfer number on a hand-off, else hang up."""
+    from app.services.voice import relay
+
+    if not relay.verify(call_id, token):
+        raise NotFound()
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    if settings.TWILIO_AUTH_TOKEN and not verify_twilio(settings.TWILIO_AUTH_TOKEN, relay.action_url(call_id), form,
+                                                        request.headers.get("x-twilio-signature", "")):
+        raise Unauthorized("Invalid signature", code="INVALID_SIGNATURE")
+    return Response(content=relay.action_twiml(call_id, form.get("HandoffData")), media_type="application/xml")
 
 
 @router.post("/webhooks/voice/simulation", include_in_schema=False)

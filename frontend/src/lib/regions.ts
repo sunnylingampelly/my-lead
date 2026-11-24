@@ -30,7 +30,25 @@ export const ALL_COUNTRIES = [...PRIMARY_COUNTRIES, ...OTHER_COUNTRIES]
 export const countryName = (code?: string | null) =>
   ALL_COUNTRIES.find((c) => c.code === code)?.name ?? code ?? '—'
 
-export const countryFlag = (code?: string | null) => ALL_COUNTRIES.find((c) => c.code === code)?.flag ?? '🌐'
+let flagSupport: boolean | null = null
+/** Windows has no flag emoji glyphs (they render as two letters), so detect support once. */
+export function supportsFlagEmoji(): boolean {
+  if (flagSupport !== null) return flagSupport
+  try {
+    const ctx = document.createElement('canvas').getContext('2d')
+    if (!ctx) return (flagSupport = false)
+    ctx.font = '16px sans-serif'
+    // A supported flag is one glyph; unsupported ones are two regional-indicator letters.
+    flagSupport = ctx.measureText('\u{1F1FA}\u{1F1F8}').width < ctx.measureText('\u{1F1FA}').width * 1.5
+  } catch {
+    flagSupport = false
+  }
+  return flagSupport
+}
+
+/** Emoji flag, or '' where the platform cannot draw it (use <CountryFlag> for an always-visible flag). */
+export const countryFlag = (code?: string | null) =>
+  supportsFlagEmoji() ? ALL_COUNTRIES.find((c) => c.code === code)?.flag ?? '' : ''
 
 /** Best guess of the viewer's market from the browser locale (en-IN, hi-IN → IN; en-US → US). */
 export function browserCountry(): string | null {

@@ -10,10 +10,11 @@ from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser, OrgCtx
 from app.core.config import settings
-from app.core.errors import Forbidden, NotFound, Unauthorized
+from app.core.errors import Forbidden, NotFound, Unauthorized, ValidationFailed
 from app.models import User
 from app.models.email import WebhookEvent
 from app.schemas.common import PageParams
+from app.schemas.voice_ai import PoolAdd
 from app.services import admin
 from app.services.billing import payments
 
@@ -186,6 +187,45 @@ def end_support(grant_id: str, me: Admin, db: DB):
     admin.end_support_session(db, me, grant_id)
     db.commit()
     return {"ended": True}
+
+
+# ------------------------------------------------------------------ phone number pool
+
+
+@router.get("/phone-numbers")
+def phone_number_pool(_: Admin, db: DB, paging: Paging, status: str | None = Query(None, max_length=20),
+                      country: str | None = Query(None, max_length=2), kind: str | None = Query(None, max_length=20),
+                      search: str | None = Query(None, max_length=40)):
+    """Numbers the platform owns, who rents them and when they renew."""
+    from app.services.voice import numbers
+
+    return numbers.admin_list(db, paging, status=status, country=country, kind=kind, search=search)
+
+
+@router.post("/phone-numbers")
+def add_phone_numbers(body: PoolAdd, me: Super, db: DB):
+    """Load numbers bought from Twilio/Exotel/Telnyx into the pool: a list, or a bulk paste (one per line)."""
+    from app.services.voice import numbers
+
+    items = [n.model_dump() for n in body.numbers]
+    if body.bulk:
+        if not (body.country and body.kind):
+            raise ValidationFailed("Choose the country and type for pasted numbers", code="BULK_DEFAULTS")
+        items += numbers.parse_bulk(body.bulk, body.country, body.kind, body.provider)
+    if not items:
+        raise ValidationFailed("Add at least one number", code="NO_NUMBERS")
+    out = numbers.admin_add(db, me.id, items)
+    db.commit()
+    return out
+
+
+@router.post("/phone-numbers/{phone_number_id}/retire")
+def retire_phone_number(phone_number_id: str, me: Super, db: DB):
+    from app.services.voice import numbers
+
+    out = numbers.admin_retire(db, me.id, phone_number_id)
+    db.commit()
+    return out
 
 
 # ------------------------------------------------------------------ payments

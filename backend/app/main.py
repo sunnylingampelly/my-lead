@@ -3,11 +3,12 @@ import time
 import uuid
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.embed import cors_headers, is_embed_path
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 
@@ -23,11 +24,16 @@ def _start_local_scheduler() -> None:
         import time as _t
 
         from app.services.automation.engine import tick as automation_tick
+        from app.services.billing.subscriptions import run_renewals
         from app.services.billing.wallet import run_settlement
         from app.services.email.engine import dispatch_due
         from app.services.sms.engine import dispatch_due as dispatch_due_sms
         from app.services.voice.engine import dispatch_due as dispatch_due_voice
+        from app.tasks.crm import crm_tick
+        from app.tasks.sms import poll_sns_receipts
+        from app.tasks.voice import sweep_ai_calls
 
+        ticks = 0
         while True:
             try:
                 dispatch_due()
@@ -35,8 +41,19 @@ def _start_local_scheduler() -> None:
                 dispatch_due_voice()
                 automation_tick()
                 run_settlement()
+                if ticks % 3 == 0:  # about once a minute
+                    poll_sns_receipts()
+                    crm_tick()
+                    from app.services.chat.conversations import tick_job as chat_tick
+
+                    chat_tick()
+                if ticks % 15 == 0:  # about every five minutes: AI calls whose results are missing
+                    sweep_ai_calls()
+                if ticks % 30 == 0:  # about every 10 minutes
+                    run_renewals()
             except Exception:
                 log.exception("local_scheduler_error")
+            ticks += 1
             _t.sleep(20)
 
     threading.Thread(target=loop, daemon=True, name="local-scheduler").start()
@@ -91,7 +108,9 @@ def create_app() -> FastAPI:
             structlog.contextvars.clear_contextvars()
         response.headers["X-Request-ID"] = request.state.request_id
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
+        if not is_embed_path(request.url.path):
+            # Embed pages (forms, chat widget) are framed by customers' sites and set CSP frame-ancestors.
+            response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         if request.url.path.startswith(settings.API_V1_PREFIX):
             response.headers.setdefault("Cache-Control", "no-store")
@@ -102,6 +121,22 @@ def create_app() -> FastAPI:
             observe(request.method, path_group(request.url.path), response.status_code, elapsed)
         log.info("request", method=request.method, path=request.url.path, status=response.status_code,
                  duration_ms=elapsed, request_id=request.state.request_id)
+        return response
+
+    @app.middleware("http")
+    async def embed_cors(request: Request, call_next):
+        # Outermost: embed endpoints are called from any website (see app/core/embed.py). Answer their
+        # preflights here, before the app-wide CORS policy (own frontend only) can refuse them.
+        if not is_embed_path(request.url.path):
+            return await call_next(request)
+        origin = request.headers.get("origin")
+        if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
+            return Response(status_code=204, headers=cors_headers(origin))
+        response = await call_next(request)
+        for k, v in cors_headers(origin).items():
+            response.headers[k] = v
+        if "access-control-allow-credentials" in response.headers:
+            del response.headers["access-control-allow-credentials"]
         return response
 
     @app.on_event("startup")
@@ -124,6 +159,12 @@ def create_app() -> FastAPI:
 
     register_error_handlers(app)
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+    from app.api.embed_chat import router as embed_chat_router
+
+    app.include_router(embed_chat_router)  # /embed/chat.js and the chat widget's iframe page
+    from app.api.embed_forms import router as embed_forms_router
+
+    app.include_router(embed_forms_router)  # /embed/forms.js, lead form iframe and hosted pages
     return app
 
 

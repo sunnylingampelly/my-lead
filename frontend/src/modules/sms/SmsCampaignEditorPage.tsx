@@ -6,23 +6,16 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarClock,
-  Check,
-  CheckCircle2,
-  Cloud,
-  CloudOff,
   FileCheck2,
-  Filter,
-  ListChecks,
   Loader2,
   MessageSquare,
   Plus,
   Send,
   Settings2,
+  ShieldCheck,
   Users,
-  XCircle,
 } from 'lucide-react'
 import { smsApi, sqk, useSmsCampaign, useSmsSenders, useSmsTemplates } from '@/api/sms'
-import { useLists, useSegments } from '@/api/audience'
 import { errorMessage } from '@/api/client'
 import { ErrorState, FullPageSpinner } from '@/components/page'
 import { Button } from '@/components/ui/button'
@@ -37,9 +30,11 @@ import { analyseSms, finalBody, OPT_OUT_TEXT, personaliseSample, toDltPattern } 
 import { TIMEZONES } from '@/lib/timezones'
 import { cn } from '@/lib/utils'
 import type { CampaignAudience } from '@/types/email'
-import type { SmsCampaign, SmsCategory } from '@/types/sms'
+import type { SenderKind, SmsCampaign, SmsCategory, SmsSender } from '@/types/sms'
+import { AudiencePicker, QuietWaitNotice, ReadinessList, SaveIndicator, StepNav, useCampaignAutosave, WalletLine, WhatIsThis } from '../email/campaignKit'
 import { CampaignStatusBadge } from '../email/components'
 import { PhonePreview, SmsComposer } from './components'
+import { AddSenderDialog, TemplateDialog } from './SmsPages'
 import { CATEGORY_LABEL, COUNTRY_FLAG, formatMoney, KIND_LABEL } from './format'
 
 const STEPS = [
@@ -53,68 +48,19 @@ type Draft = Partial<SmsCampaign>
 
 function useAutosave(appId: string, campaign: SmsCampaign | undefined) {
   const qc = useQueryClient()
-  const [draft, setDraft] = useState<Draft>({})
-  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const pending = useRef<Draft>({})
-  const timer = useRef<number | undefined>(undefined)
-  const loaded = useRef(false)
-  useEffect(() => {
-    if (campaign && !loaded.current) {
-      loaded.current = true
-      setDraft(campaign)
-    }
-  }, [campaign])
-  const flush = useCallback(async () => {
-    window.clearTimeout(timer.current)
-    const body = pending.current
-    if (!campaign || !Object.keys(body).length) return true
-    pending.current = {}
-    setState('saving')
-    try {
-      const saved = await smsApi(appId).updateCampaign(campaign.id, body)
-      qc.setQueryData(sqk.campaign(appId, campaign.id), saved)
+  const setDraftRef = useRef<((f: (d: Draft) => Draft) => void) | null>(null)
+  const auto = useCampaignAutosave<SmsCampaign>({
+    campaign,
+    save: (id, body) => smsApi(appId).updateCampaign(id, body),
+    onSaved: (saved, body) => {
+      qc.setQueryData(sqk.campaign(appId, saved.id), saved)
       // A template choice fills body, category and sender on the server; reflect it.
-      if ('template_id' in body) setDraft((d) => ({ ...d, body: saved.body, category: saved.category, sender_ref: saved.sender_ref }))
-      setState('saved')
-      return true
-    } catch (e) {
-      pending.current = { ...body, ...pending.current }
-      setState('error')
-      toast.error(errorMessage(e))
-      return false
-    }
-  }, [appId, campaign, qc])
-  const update = useCallback(
-    (patch: Draft, immediate = false) => {
-      setDraft((d) => ({ ...d, ...patch }))
-      pending.current = { ...pending.current, ...patch }
-      window.clearTimeout(timer.current)
-      timer.current = window.setTimeout(flush, immediate ? 0 : 800)
+      if ('template_id' in body) setDraftRef.current?.((d) => ({ ...d, body: saved.body, category: saved.category, sender_ref: saved.sender_ref }))
     },
-    [flush],
-  )
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  return { draft, update, flush, state }
-}
-
-function SaveIndicator({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
-  if (state === 'saving')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> Saving…
-      </span>
-    )
-  if (state === 'error')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-destructive">
-        <CloudOff className="size-3.5" /> Not saved
-      </span>
-    )
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="save-state">
-      <Cloud className="size-3.5" /> {state === 'saved' ? 'All changes saved' : 'Draft'}
-    </span>
-  )
+    rest: 'your changes',
+  })
+  setDraftRef.current = auto.setDraft
+  return auto
 }
 
 type Update = (p: Draft, immediate?: boolean) => void
@@ -129,9 +75,16 @@ function useSender(draft: Draft) {
 
 function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
   const { app, can } = useWorkspace()
+  const qc = useQueryClient()
   const { senders, sender } = useSender(draft)
   const templates = useSmsTemplates(app!.id)
-  const base = `/apps/${app!.id}/sms`
+  const [adding, setAdding] = useState(false)
+  const [addingTpl, setAddingTpl] = useState(false)
+  const [attest, setAttest] = useState<SmsSender | null>(null)
+  const [busy, setBusy] = useState(false)
+  const admin = can('settings.write')
+  const market = sender?.country ?? (app!.default_country === 'US' ? 'US' : 'IN')
+  const wantKind: SenderKind = market === 'IN' ? (draft.category === 'promotional' ? 'promotional' : 'transactional') : 'long_code'
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
@@ -171,12 +124,18 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
           ) : !senders.data?.length ? (
             <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
               No sender IDs yet.{' '}
-              {can('settings.write') ? (
-                <Link className="font-medium text-primary hover:underline" to={`${base}/senders`}>
-                  Add one
-                </Link>
+              {admin ? (
+                <button className="font-medium text-primary hover:underline" onClick={() => setAdding(true)} data-testid="add-sender-inline">
+                  Add one now
+                </button>
               ) : (
                 'Ask an admin to add one.'
+              )}
+              {market === 'IN' && (
+                <span className="mt-1 block text-xs">
+                  {draft.category === 'promotional' ? 'Promotional texts need a 6-digit numeric DLT header.' : 'Service and transactional texts need a 6-letter DLT header.'}
+                  <WhatIsThis term="dlt_header" />
+                </span>
               )}
             </div>
           ) : (
@@ -193,15 +152,46 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
                   </span>
                   {s.status === 'active' ? (
                     <span className="text-xs font-medium text-success-strong">Approved</span>
+                  ) : admin ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setAttest(s)
+                      }}
+                      data-testid="confirm-sender-inline"
+                    >
+                      <ShieldCheck /> Confirm
+                    </Button>
                   ) : (
                     <span className="text-xs font-medium text-warning-strong">Not confirmed</span>
                   )}
                 </label>
               ))}
+              {admin && (
+                <button className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" onClick={() => setAdding(true)} data-testid="add-sender-inline">
+                  <Plus className="size-3" /> Add another sender ID
+                </button>
+              )}
             </div>
           )}
-          {sender?.country === 'IN' && (
-            <Field label="DLT content template" htmlFor="c-tpl" hint="Indian operators only deliver text that matches a registered DLT template.">
+          {market === 'IN' && (
+            <Field
+              label="DLT content template"
+              htmlFor="c-tpl"
+              hint="Indian operators only deliver text that matches a registered DLT template."
+              action={
+                <span className="flex items-center gap-2">
+                  <WhatIsThis term="dlt_template" />
+                  {can('campaigns.write') && (
+                    <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" onClick={() => setAddingTpl(true)} data-testid="add-template-inline">
+                      <Plus className="size-3" /> Add template
+                    </button>
+                  )}
+                </span>
+              }
+            >
               <Select id="c-tpl" value={draft.template_id ?? ''} onChange={(e) => update({ template_id: e.target.value || null }, true)}>
                 <option value="">Choose a template…</option>
                 {templates.data?.map((t) => (
@@ -213,7 +203,7 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
               </Select>
             </Field>
           )}
-          {sender?.country !== 'IN' && !!templates.data?.length && (
+          {market !== 'IN' && !!templates.data?.length && (
             <Field label="Start from a template (optional)" htmlFor="c-tpl2">
               <Select id="c-tpl2" value={draft.template_id ?? ''} onChange={(e) => update({ template_id: e.target.value || null }, true)}>
                 <option value="">Write from scratch</option>
@@ -227,6 +217,39 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
           )}
         </CardContent>
       </Card>
+      <AddSenderDialog open={adding} onOpenChange={setAdding} defaultKind={wantKind} onCreated={(s) => update({ sender_ref: s.id }, true)} />
+      <TemplateDialog
+        open={addingTpl}
+        onOpenChange={setAddingTpl}
+        template={null}
+        initial={{ category: draft.category, body: draft.body ?? '', sender_ref: draft.sender_ref ?? null }}
+        onSaved={(tpl) => update({ template_id: tpl.id }, true)}
+      />
+      <ConfirmDialog
+        open={!!attest}
+        onOpenChange={(o) => !o && setAttest(null)}
+        title={`Confirm ${attest?.sender_id} is registered?`}
+        description={
+          attest?.country === 'IN'
+            ? 'You confirm this header is approved on your DLT portal for your Principal Entity. Operators block texts from unregistered headers. Your name and the time are recorded.'
+            : 'You confirm this number or short code is provisioned for your business and linked to an approved 10DLC campaign or toll-free verification. Your name and the time are recorded.'
+        }
+        confirmLabel="I confirm"
+        loading={busy}
+        onConfirm={async () => {
+          setBusy(true)
+          try {
+            await smsApi(app!.id).attestSender(attest!.id)
+            await qc.invalidateQueries({ queryKey: sqk.all(app!.id) })
+            toast.success('Sender ID approved')
+          } catch (e) {
+            toast.error(errorMessage(e))
+          } finally {
+            setBusy(false)
+            setAttest(null)
+          }
+        }}
+      />
     </div>
   )
 }
@@ -280,7 +303,12 @@ function MessageStep({ draft, update }: { draft: Draft; update: Update }) {
                     </div>
                   </div>
                 )}
-                {dltOk === false && <p className="mt-2 text-xs">Edit the text so only the {'{#var#}'} positions differ, or register a new template on your DLT portal.</p>}
+                {dltOk === false && (
+                  <p className="mt-2 text-xs">
+                    Edit the text so only the {'{#var#}'} positions differ, or register a new template on your DLT portal.
+                    <WhatIsThis term="dlt_var" />
+                  </p>
+                )}
               </div>
             )}
           </CardContent>
@@ -309,71 +337,27 @@ const EXCLUDE_LABEL: Record<string, string> = {
 function AudienceStep({ draft, update }: { draft: Draft; update: Update }) {
   const { app } = useWorkspace()
   const { sender } = useSender(draft)
-  const segments = useSegments(app!.id)
-  const lists = useLists(app!.id)
+  const country = sender?.country ?? (app!.default_country === 'US' || app!.default_country === 'IN' ? app!.default_country : undefined)
   const aud: CampaignAudience = draft.audience ?? {}
-  const set = (a: CampaignAudience) => update({ audience: { all: false, list_ids: [], segment_ids: [], ...a } })
   const key = JSON.stringify(aud)
   const [debounced, setDebounced] = useState(aud)
   useEffect(() => {
     const t = setTimeout(() => setDebounced(JSON.parse(key) as CampaignAudience), 300)
     return () => clearTimeout(t)
   }, [key])
-  const est = useQuery({ queryKey: ['sms-estimate', app!.id, debounced, sender?.country], queryFn: () => smsApi(app!.id).estimate(debounced, sender?.country), placeholderData: (p) => p })
+  const est = useQuery({ queryKey: ['sms-estimate', app!.id, debounced, country], queryFn: () => smsApi(app!.id).estimate(debounced, country), placeholderData: (p) => p })
   const f = (n: number) => formatCount(n, app!.default_country)
-  const toggle = (k: 'list_ids' | 'segment_ids', id: string, on: boolean) => {
-    const cur = new Set(aud[k] ?? [])
-    if (on) cur.add(id)
-    else cur.delete(id)
-    set({ ...aud, all: false, [k]: [...cur] })
-  }
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>Who should receive this?</CardTitle>
           <CardDescription>
-            People in more than one segment or list get one text. {sender && `Only numbers in ${sender.country === 'IN' ? 'India' : 'the United States'} can be reached from ${sender.sender_id}.`}
+            People in more than one segment or list get one text. {country && `Only mobile numbers in ${country === 'IN' ? 'India' : 'the United States'} can be reached${sender ? ` from ${sender.sender_id}` : ''}.`}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', aud.all && 'border-primary bg-accent/40')}>
-            <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!!aud.all} onChange={() => set({ all: true })} />
-            <span>
-              <span className="text-sm font-medium">All reachable contacts</span>
-              <span className="block text-xs text-muted-foreground">Everyone with SMS consent and a mobile number.</span>
-            </span>
-          </label>
-          <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', !aud.all && 'border-primary bg-accent/40')}>
-            <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!aud.all} onChange={() => set({ ...aud, all: false })} />
-            <span className="text-sm font-medium">Specific segments and lists</span>
-          </label>
-          {!aud.all && (
-            <div className="grid gap-4 md:grid-cols-2">
-              {(
-                [
-                  ['segment_ids', 'Segments', Filter, segments.data?.map((s) => ({ id: s.id, name: s.name, n: s.last_count }))],
-                  ['list_ids', 'Lists', ListChecks, lists.data?.map((l) => ({ id: l.id, name: l.name, n: l.contact_count }))],
-                ] as const
-              ).map(([k, label, Icon, items]) => (
-                <div key={k}>
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Icon className="size-3.5" /> {label}
-                  </div>
-                  <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-                    {items?.length === 0 && <p className="p-2 text-sm text-muted-foreground">None yet.</p>}
-                    {items?.map((it) => (
-                      <label key={it.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                        <Checkbox checked={aud[k]?.includes(it.id) ?? false} onChange={(e) => toggle(k, it.id, e.target.checked)} aria-label={it.name} />
-                        <span className="flex-1 truncate">{it.name}</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{it.n === null ? '—' : f(it.n)}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        <CardContent>
+          <AudiencePicker audience={aud} onChange={(a) => update({ audience: a })} allHint="Everyone with SMS consent and a mobile number." />
         </CardContent>
       </Card>
       <Card className="h-fit lg:sticky lg:top-20">
@@ -426,9 +410,6 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
   const [busy, setBusy] = useState(false)
   const eligible = ready.data?.estimate?.eligible ?? 0
   const f = (n: number) => formatCount(n, app!.default_country)
-  const stepFor: Record<string, StepKey> = { sender: 'setup', category: 'setup', dlt_template: 'setup', content: 'message', personalisation: 'message', opt_out: 'message', audience: 'audience' }
-  const settingsFix: Record<string, string> = { registration: `/apps/${app!.id}/sms/registration`, provider: `/apps/${app!.id}/settings` }
-  if (ready.data?.checks.some((c) => c.key === 'sender' && !c.ok && sender)) settingsFix.sender = `/apps/${app!.id}/sms/senders`
   const cost = ready.data?.cost
 
   const launch = async () => {
@@ -455,7 +436,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Compliance checklist</CardTitle>
@@ -465,27 +446,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
             {ready.isLoading ? (
               <Skeleton className="h-40 w-full" />
             ) : (
-              <ul className="divide-y" data-testid="readiness">
-                {ready.data?.checks.map((c) => (
-                  <li key={c.key} className="flex items-start gap-3 py-3">
-                    {c.ok ? <CheckCircle2 className="mt-0.5 size-5 text-success-strong" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium">{c.label}</div>
-                      {c.detail && <div className="text-xs text-muted-foreground">{c.detail}</div>}
-                    </div>
-                    {!c.ok &&
-                      (settingsFix[c.key] ? (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to={settingsFix[c.key]!}>Fix</Link>
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={() => goTo(stepFor[c.key] ?? 'setup')}>
-                          Fix
-                        </Button>
-                      ))}
-                  </li>
-                ))}
-              </ul>
+              <ReadinessList checks={ready.data?.checks ?? []} channel="sms" onStep={(s) => goTo(s as StepKey)} />
             )}
           </CardContent>
         </Card>
@@ -500,10 +461,10 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 ['Type', CATEGORY_LABEL[draft.category ?? 'promotional'], 'setup'],
                 ['Message', ready.data ? `${ready.data.message.segments} part(s) · ${ready.data.message.encoding}` : '—', 'message'],
                 ['Recipients', ready.data?.estimate ? `${f(eligible)} reachable contacts` : '—', 'audience'],
-                ['Estimated cost', cost ? `${formatMoney(cost.total, cost.currency)} (${formatMoney(cost.unit_price, cost.currency)} per part)` : '—', 'audience'],
+                ['Estimated cost', cost ? `${formatMoney(cost.total, cost.currency)} (${formatMoney(cost.unit_price, cost.currency)} per part${ready.data?.sender_chosen ? '' : `, ${ready.data?.country === 'US' ? 'US' : 'India'} pricing`})` : '—', 'audience'],
               ].map(([k, v, step]) => (
-                <div key={k} className="flex items-center gap-4 py-2.5">
-                  <dt className="w-32 shrink-0 text-muted-foreground">{k}</dt>
+                <div key={k} className="flex items-center gap-3 py-2.5 sm:gap-4">
+                  <dt className="w-24 shrink-0 text-muted-foreground sm:w-32">{k}</dt>
                   <dd className="min-w-0 flex-1 truncate" data-testid={k === 'Estimated cost' ? 'cost-estimate' : undefined}>
                     {v}
                   </dd>
@@ -513,16 +474,20 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 </div>
               ))}
             </dl>
+            <div className="mt-2">
+              <WalletLine wallet={ready.data?.wallet} cost={cost} />
+            </div>
             {draft.category === 'promotional' && (
-              <p className="mt-3 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                Promotional texts are held during quiet hours in each recipient’s time zone and sent when the window ends.
+              <p className="mt-3 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-testid="send-window">
+                Promotional texts go out {ready.data?.quiet_hours.window.start ? `${ready.data.quiet_hours.window.start}–${ready.data.quiet_hours.window.end}` : 'outside quiet hours'} in each recipient’s time zone ({ready.data?.quiet_hours.window.reason.toLowerCase() ?? 'outside your quiet hours'}); texts due in quiet hours wait until the window opens.
+                <WhatIsThis term="quiet_hours" />
               </p>
             )}
           </CardContent>
         </Card>
       </div>
 
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         {ready.data && <PhonePreview sender={sender?.sender_id} text={ready.data.message.text} label="Sample personalisation" />}
         <Card>
           <CardHeader>
@@ -530,7 +495,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
             <CardDescription>Up to five numbers, comma separated, in the sender’s country.</CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
-            <Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={sender?.country === 'US' ? '+1 415 555 2671' : '+91 98765 43210'} aria-label="Test phone numbers" />
+            <Input className="min-w-0" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={sender?.country === 'US' ? '+1 415 555 2671' : '+91 98765 43210'} aria-label="Test phone numbers" />
             <Button
               variant="outline"
               loading={testing}
@@ -579,6 +544,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 </Field>
               </div>
             )}
+            {mode === 'now' && <QuietWaitNotice q={ready.data?.quiet_hours} noun={['text', 'texts']} app={app!} />}
             <Button className="w-full" size="lg" disabled={!ready.data?.ready} onClick={() => setConfirm(true)} data-testid="launch">
               {mode === 'now' ? <Send /> : <CalendarClock />}
               {mode === 'now' ? `Send to ${f(eligible)} contacts` : 'Schedule campaign'}
@@ -629,7 +595,7 @@ export function SmsCampaignEditorPage() {
     const d = new Set<StepKey>()
     if (draft.sender_ref && draft.name) d.add('setup')
     if (draft.body?.trim()) d.add('message')
-    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length) d.add('audience')
+    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length || draft.audience?.contact_ids?.length) d.add('audience')
     return d
   }, [draft])
 
@@ -678,28 +644,14 @@ export function SmsCampaignEditorPage() {
         >
           <ArrowLeft />
         </Button>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-xl font-semibold tracking-tight">{draft.name || 'Untitled campaign'}</h1>
             <CampaignStatusBadge status={c.status} />
           </div>
-          <SaveIndicator state={state} />
+          <SaveIndicator state={state} onRetry={() => void flush()} />
         </div>
-        <nav className="ml-auto flex items-center gap-1 rounded-xl border bg-card p-1 shadow-card" aria-label="Campaign steps">
-          {STEPS.map((s, i) => (
-            <button
-              key={s.key}
-              onClick={() => goTo(s.key)}
-              aria-current={step === s.key ? 'step' : undefined}
-              className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition', step === s.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}
-            >
-              <span className={cn('flex size-5 items-center justify-center rounded-full text-[11px]', step === s.key ? 'bg-white/20' : doneSteps.has(s.key) ? 'bg-success-soft text-success-strong' : 'bg-muted')}>
-                {doneSteps.has(s.key) && step !== s.key ? <Check className="size-3" /> : i + 1}
-              </span>
-              <span className="hidden md:inline">{s.label}</span>
-            </button>
-          ))}
-        </nav>
+        <StepNav steps={STEPS} step={step} done={doneSteps} onGo={goTo} />
       </div>
 
       {step === 'setup' && <SetupStep draft={draft} update={update} />}

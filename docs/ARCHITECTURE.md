@@ -10,9 +10,9 @@ campaigns against per-application audiences.
 Browser (React SPA)
    │  same-origin /api/v1  (Vite proxy in dev, nginx in prod)
    ▼
-FastAPI  ──►  service layer  ──►  SQLAlchemy  ──►  MySQL 8 (SQLite for docker-less dev/tests)
+FastAPI  ──►  service layer  ──►  SQLAlchemy  ──►  MySQL 8 (MariaDB 10.4+ works for local dev)
    │                 │
-   │                 └─► Celery tasks (Redis broker) ──► provider adapters (simulation | SES | Brevo | MSG91 | Twilio | Exotel)
+   │                 └─► Celery tasks (Redis broker) ──► provider adapters (simulation | SES | Brevo | SNS | Twilio | Exotel)
    │                                                        ▲
    └─► /webhooks/{provider} ──► verify signature ──► store raw event ──► async normalise
 Celery Beat ──► scheduled campaigns, retries, retention jobs
@@ -219,7 +219,7 @@ All routes are under `/api/v1`. Errors use one envelope:
 | Automation | `/apps/{app_id}/automation/workflows` CRUD + `/validate`, `/publish`, `/pause`, `/resume`, `/archive`, `/duplicate`, `/stats`, `/runs`, `/runs/{id}`, `/runs/{id}/stop` | Built |
 | Analytics | `/apps/{app_id}/analytics?start&end`, `/apps/{app_id}/analytics/export.csv` | Built |
 | Billing | `/organizations/{id}/billing`, `/billing/transactions`, `/billing/transactions.csv`, `/billing/test-credit` (simulation only), `/billing/threshold`; `/apps/{app_id}/billing`, `/apps/{app_id}/billing/transactions` | Built |
-| Webhooks | `POST /webhooks/email/ses`, `/webhooks/email/brevo?token=`, `/webhooks/email/simulation`; `/webhooks/sms/twilio/status`, `/webhooks/sms/twilio/inbound` (X-Twilio-Signature), `/webhooks/sms/msg91?token=`, `/webhooks/sms/msg91/inbound?token=`, `/webhooks/sms/simulation`; `/webhooks/voice/twilio/status` (X-Twilio-Signature), `/webhooks/voice/telnyx/status/{token}/{attempt}` (signed token + Ed25519), `/webhooks/voice/exotel/status?token=`, `/webhooks/voice/simulation` (signed, non-production) | Built |
+| Webhooks | `POST /webhooks/email/ses`, `/webhooks/email/brevo?token=`, `/webhooks/email/simulation`; `/webhooks/sms/sns` (SNS signature; SMS receipts come from CloudWatch, not webhooks), `/webhooks/sms/simulation`; `/webhooks/voice/twilio/status` (X-Twilio-Signature), `/webhooks/voice/telnyx/status/{token}/{attempt}` (signed token + Ed25519), `/webhooks/voice/exotel/status?token=`, `/webhooks/voice/simulation` (signed, non-production) | Built |
 | Platform admin | `/admin/me`, `/admin/staff` (+ `PATCH`/`DELETE /admin/staff/{id}`), `/admin/support-sessions`, `/admin/organizations/{id}/support-session`, `/admin/support-sessions/{id}/end`, `/admin/overview`, `/admin/settings`, `/admin/organizations` (+ `/suspend`, `/reactivate`, `/wallet`), `/admin/users` (+ `/suspend`, `/reactivate`), `/admin/webhooks` (+ `/retry`) | Built |
 | Payments | `/organizations/{id}/billing/payments/options`, `/billing/checkout`, `/billing/payments`, `/billing/payments/{id}`; `/webhooks/payments/stripe`, `/webhooks/payments/razorpay` | Built |
 | Monitoring | `/health/live`, `/health`, `/metrics` (bearer token) | Built |

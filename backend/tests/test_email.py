@@ -10,7 +10,7 @@ from sqlalchemy import func, select, update
 from app.core.database import SessionLocal
 from app.models.email import EmailCampaign, EmailEvent, EmailMessage
 from app.services.email import render, tokens
-from tests.conftest import Api, invite_and_join, mailbox, token_from_last_email
+from tests.conftest import Api, invite_and_join, mailbox, make_pro, token_from_last_email
 
 HTML = ('<html><body><h1>Hello {{first_name | default: "there"}}</h1><p>From {{company}} in {{city}}.</p>'
         '<a href="https://shop.example.com/sale">Shop the sale</a> '
@@ -410,9 +410,112 @@ def test_permissions_and_isolation(em):
     bob.create_app(org["id"], "Bob")
     for url in [f"{em.e}/campaigns", f"{em.e}/campaigns/{c['id']}", f"{em.e}/senders", f"{em.e}/overview"]:
         assert bob.get(url).status_code == 404
+    make_pro(em.org["id"])  # a third application
     other = em.post("/applications", json={"organization_id": em.org["id"], "name": "Other"}).json()
     r = em.patch(f"/apps/{other['id']}/email/campaigns/{c['id']}", json={"subject": "x"})
     assert r.status_code == 404
     oc = em.post(f"/apps/{other['id']}/email/campaigns", json={"name": "x"}).json()
     r = em.patch(f"/apps/{other['id']}/email/campaigns/{oc['id']}", json={"sender_id": em.sender_id})
     assert r.status_code == 422 and r.json()["error"]["code"] == "INVALID_SENDER"
+
+
+# ------------------------------------------------------------------ first-send guidance (UX fixes)
+
+def _deep(levels: int) -> dict:
+    node: dict = {"type": "text", "content": "Hello"}
+    for i in range(levels):
+        node = {"type": "cell", "attributes": {"id": f"c{i}"}, "components": [node]}
+    return {"pages": [{"frames": [{"component": node}]}]}
+
+
+def _depth(d) -> int:
+    if isinstance(d, dict):
+        return 1 + max((_depth(v) for v in d.values()), default=0)
+    if isinstance(d, list):
+        return 1 + max((_depth(v) for v in d), default=0)
+    return 0
+
+
+def test_deeply_nested_design_saves_through_campaign_and_template_apis(em):
+    """Regression: MariaDB's JSON CHECK rejected designs nested more than 32 levels (autosave returned 500)."""
+    design = _deep(60)
+    assert _depth(design) > 120
+    c = em.post(f"{em.e}/campaigns", json={"name": "Deep"}).json()
+    r = em.patch(f"{em.e}/campaigns/{c['id']}", json={"design": design, "html": "<p>Hi</p>", "editor": "visual"})
+    assert r.status_code == 200, r.text
+    assert em.get(f"{em.e}/campaigns/{c['id']}").json()["design"] == design
+    t = em.post(f"{em.e}/templates", json={"name": "Deep", "design": {"a": 1}, "html": "<p>x</p>"}).json()
+    r = em.patch(f"{em.e}/templates/{t['id']}", json={"design": design})
+    assert r.status_code == 200, r.text
+    assert em.get(f"{em.e}/templates/{t['id']}").json()["design"] == design
+    # Audience saved separately is untouched by a later design save, and a bad payload is a 4xx, never a 500.
+    assert em.patch(f"{em.e}/campaigns/{c['id']}", json={"audience": {"all": True}}).status_code == 200
+    bad = em.patch(f"{em.e}/campaigns/{c['id']}", json={"design": "not an object"})
+    assert bad.status_code == 422
+    assert em.get(f"{em.e}/campaigns/{c['id']}").json()["audience"]["all"] is True
+
+
+def test_readiness_checks_are_self_describing_with_wallet_row(em):
+    pending = em.post(f"{em.e}/senders", json={"from_name": "New", "from_email": "new@acme.example"}).json()
+    c = em.post(f"{em.e}/campaigns", json={"name": "Guided"}).json()
+    assert c["sender_id"] == em.sender_id  # a verified sender is preferred as the default
+    em.patch(f"{em.e}/campaigns/{c['id']}", json={"sender_id": pending["id"]})
+    rd = em.get(f"{em.e}/campaigns/{c['id']}/readiness").json()
+    checks = {ch["key"]: ch for ch in rd["checks"]}
+    sender = checks["sender"]
+    assert sender["ok"] is False and sender["step"] == "setup"
+    assert sender["action_url"] == f"{em.base}/email/senders" and sender["meta"]["status"] == "pending"
+    assert sender["meta"]["sender_id"] == pending["id"]
+    assert checks["audience"]["step"] == "audience" and checks["content"]["step"] == "content"
+    assert rd["wallet"]["currency"] in ("INR", "USD") and "available" in rd["wallet"]
+    em.patch(f"{em.e}/campaigns/{c['id']}", json={"sender_id": em.sender_id, "subject": "Hi", "html": "<p>Hi</p>",
+                                                   "audience": {"all": True}})
+    rd = em.get(f"{em.e}/campaigns/{c['id']}/readiness").json()
+    wallet = next(ch for ch in rd["checks"] if ch["key"] == "wallet")
+    assert {"available", "need", "currency", "estimate", "can_top_up"} <= set(wallet["meta"])
+    assert wallet["meta"]["can_top_up"] is True  # the owner may buy credit
+    assert rd["cost"]["currency"] == "INR" and rd["cost"]["total"] == pytest.approx(rd["cost"]["unit_price"] * 4)
+
+
+def test_postal_address_check_links_to_compliance_settings(owner):
+    app = owner.post("/applications", json={"organization_id": owner.org["id"], "name": "US Mail 2",
+                                             "default_country": "US"}).json()
+    e = f"/apps/{app['id']}/email"
+    c = owner.post(f"{e}/campaigns", json={"name": "US"}).json()
+    checks = {ch["key"]: ch for ch in owner.get(f"{e}/campaigns/{c['id']}/readiness").json()["checks"]}
+    assert checks["postal_address"]["action_url"] == f"/apps/{app['id']}/settings?tab=compliance"
+    assert checks["sender"]["detail"] == "Choose a sender address"
+
+
+def test_contact_ids_audience_mode_and_new_campaign_with_audience(em):
+    ids = [em.contacts["asha@example.com"], em.contacts["noconsent@example.com"]]
+    est = em.post(f"{em.e}/campaigns/estimate", json={"contact_ids": ids}).json()
+    assert (est["matched"], est["eligible"]) == (2, 1)
+    c = em.post(f"{em.e}/campaigns", json={"name": "Picked", "audience": {"contact_ids": ids}})
+    assert c.status_code == 201 and c.json()["audience"]["contact_ids"] == ids
+    seg = em.post(f"{em.e}/campaigns", json={"name": "Seg", "audience": {"segment_ids": [em.segment_id]}}).json()
+    assert seg["audience"]["segment_ids"] == [em.segment_id]
+    # Contacts of another application or unknown ids are rejected; at most 1,000 explicit contacts.
+    bad = em.post(f"{em.e}/campaigns", json={"name": "Bad", "audience": {"contact_ids": ["nope"]}})
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "INVALID_AUDIENCE"
+    too_many = em.post(f"{em.e}/campaigns/estimate", json={"contact_ids": [f"id-{i}" for i in range(1001)]})
+    assert too_many.status_code == 422
+    c = make_campaign(em, audience={"contact_ids": ids})
+    assert em.post(f"{em.e}/campaigns/{c['id']}/send").status_code == 200
+    done = em.get(f"{em.e}/campaigns/{c['id']}").json()
+    assert done["recipient_count"] == 1 and mailbox("asha@example.com") and not mailbox("ravi@example.com")
+
+
+def test_recipient_ids_resolve_report_filters(em):
+    c = make_campaign(em)
+    em.post(f"{em.e}/campaigns/{c['id']}/send")
+    html = campaign_mail("asha@example.com")["html"]
+    Api().get(re.search(r"/api/v1(/t/o/[^\"]+\.gif)", html).group(1))
+    r = em.get(f"{em.e}/campaigns/{c['id']}/recipients/ids", params={"status": "opened"}).json()
+    assert r["contact_ids"] == [em.contacts["asha@example.com"]] and r["total"] == 1 and r["truncated"] is False
+    non = em.get(f"{em.e}/campaigns/{c['id']}/recipients/ids", params={"status": "not_opened"}).json()
+    assert set(non["contact_ids"]) == {em.contacts["ravi@example.com"]}  # the bounce is not a non-opener
+    bounced = em.get(f"{em.e}/campaigns/{c['id']}/recipients/ids", params={"status": "bounced"}).json()
+    assert bounced["contact_ids"] == [em.contacts["bounce@example.com"]]
+    every = em.get(f"{em.e}/campaigns/{c['id']}/recipients/ids").json()
+    assert every["total"] == 3 and every["limit"] == 5000

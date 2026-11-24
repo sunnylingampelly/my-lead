@@ -12,6 +12,7 @@ import type {
   Estimate,
   Preview,
   Readiness,
+  RecipientIds,
   Sender,
   Variables,
 } from '@/types/email'
@@ -43,7 +44,9 @@ export const emailApi = (appId: string) => {
     campaigns: (params: { page: number; page_size: number; status?: string; search?: string }) =>
       data(http.get<Page<CampaignListItem>>(`${b}/campaigns`, { params: Object.fromEntries(Object.entries(params).filter(([, v]) => v)) })),
     campaign: (id: string) => data(http.get<Campaign>(`${b}/campaigns/${id}`)),
-    createCampaign: (body: { name: string; description?: string | null; campaign_type?: string; template_id?: string | null }) =>
+    recipientIds: (id: string, status?: string) =>
+      data(http.get<RecipientIds>(`${b}/campaigns/${id}/recipients/ids`, { params: status ? { status } : {} })),
+    createCampaign: (body: { name: string; description?: string | null; campaign_type?: string; template_id?: string | null; audience?: CampaignAudience }) =>
       data(http.post<Campaign>(`${b}/campaigns`, body)),
     updateCampaign: (id: string, body: Partial<Campaign>) => data(http.patch<Campaign>(`${b}/campaigns/${id}`, body)),
     deleteCampaign: (id: string) => data(http.delete(`${b}/campaigns/${id}`)),
@@ -84,8 +87,16 @@ const LIVE: Campaign['status'][] = ['queued', 'sending']
 
 export const useEmailOverview = (appId: string) => useQuery({ queryKey: eqk.overview(appId), queryFn: () => emailApi(appId).overview() })
 // Verification happens in another tab (the emailed link), so always refresh on mount and focus.
-export const useSenders = (appId: string) =>
-  useQuery({ queryKey: eqk.senders(appId), queryFn: () => emailApi(appId).senders(), refetchOnMount: 'always', refetchOnWindowFocus: true, staleTime: 0 })
+export const useSenders = (appId: string, pollWhilePending = false) =>
+  useQuery({
+    queryKey: eqk.senders(appId),
+    queryFn: () => emailApi(appId).senders(),
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+    // While an address awaits confirmation, check every few seconds so the UI updates by itself.
+    refetchInterval: (q) => (pollWhilePending && q.state.data?.some((s) => s.status !== 'verified') ? 4000 : false),
+  })
 export const useTemplates = (appId: string) => useQuery({ queryKey: eqk.templates(appId), queryFn: () => emailApi(appId).templates() })
 export const useVariables = (appId: string) =>
   useQuery({ queryKey: eqk.variables(appId), queryFn: () => emailApi(appId).variables(), staleTime: 60_000 })

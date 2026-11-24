@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { MoreHorizontal, Plus, Search, Workflow as WorkflowIcon } from 'lucide-react'
 import { automationApi, type WorkflowSummary, useWorkflows, wqk } from '@/api/automation'
 import { errorMessage } from '@/api/client'
-import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
+import { EmptyState, ErrorState, FullPageSpinner, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -18,11 +18,14 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn, timeAgo } from '@/lib/utils'
 import { NODE_META, STARTERS, TRIGGER_LABEL } from './meta'
+
+const PRESET_KEYS = ['list_id', 'segment_id', 'tag_id', 'pipeline_id', 'stage_id', 'keyword', 'campaign_id', 'channel', 'form_id'] as const
 import { WorkflowStatusBadge } from './RunsPanel'
 
 function NewWorkflowDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { app } = useWorkspace()
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [busy, setBusy] = useState<string | null>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -31,7 +34,7 @@ function NewWorkflowDialog({ open, onOpenChange }: { open: boolean; onOpenChange
           <DialogTitle>New workflow</DialogTitle>
           <DialogDescription>Start from a ready-made journey or a blank canvas. You choose senders, templates and lists in the builder.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid max-h-[65vh] gap-3 overflow-y-auto sm:grid-cols-2">
           {STARTERS.map((s) => (
             <button
               key={s.key}
@@ -41,6 +44,7 @@ function NewWorkflowDialog({ open, onOpenChange }: { open: boolean; onOpenChange
                 setBusy(s.key)
                 try {
                   const w = await automationApi(app!.id).create({ name: s.key === 'blank' ? 'Untitled workflow' : s.name, description: s.description, graph: s.graph })
+                  void qc.invalidateQueries({ queryKey: wqk.all(app!.id) })
                   navigate(`/apps/${app!.id}/automation/${w.id}`)
                 } catch (e) {
                   toast.error(errorMessage(e))
@@ -60,7 +64,10 @@ function NewWorkflowDialog({ open, onOpenChange }: { open: boolean; onOpenChange
                   )
                 })}
               </div>
-              <div className="text-sm font-semibold">{s.name}</div>
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                {s.name}
+                {s.group && <Badge variant="secondary">{s.group}</Badge>}
+              </div>
               <div className="mt-0.5 text-xs text-muted-foreground">{s.description}</div>
             </button>
           ))}
@@ -238,4 +245,46 @@ export function AutomationPage() {
       />
     </>
   )
+}
+
+/**
+ * /apps/:appId/automation/new?trigger=<kind>[&segment_id=…|&list_id=…|&tag_id=…]
+ * Creates a draft workflow with that trigger preset, then opens it in the builder (trigger selected).
+ */
+export function NewWorkflowFromLinkPage() {
+  const { app, can } = useWorkspace()
+  const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const qc = useQueryClient()
+  const started = useRef(false)
+  const [error, setError] = useState<unknown>(null)
+  useEffect(() => {
+    if (started.current || !app) return
+    started.current = true
+    const kind = params.get('trigger') || 'contact_created'
+    if (!can('automation.write')) {
+      setError(new Error('You need permission to create workflows.'))
+      return
+    }
+    const data: Record<string, unknown> = { kind: TRIGGER_LABEL[kind] ? kind : 'contact_created' }
+    for (const k of PRESET_KEYS) {
+      const v = params.get(k)
+      if (v) data[k] = v
+    }
+    automationApi(app.id)
+      .create({
+        name: params.get('name') || `${TRIGGER_LABEL[data.kind as string]} journey`,
+        graph: { nodes: [{ id: 'trigger', type: 'trigger', position: { x: 0, y: 0 }, data }], edges: [] },
+      })
+      .then((w) => {
+        void qc.invalidateQueries({ queryKey: wqk.all(app.id) })
+        navigate(`/apps/${app.id}/automation/${w.id}?node=trigger`, { replace: true })
+      })
+      .catch((e) => {
+        toast.error(errorMessage(e))
+        setError(e)
+      })
+  }, [app, can, params, navigate, qc])
+  if (error) return <ErrorState error={error} onRetry={() => navigate(`/apps/${app!.id}/automation`)} />
+  return <FullPageSpinner />
 }

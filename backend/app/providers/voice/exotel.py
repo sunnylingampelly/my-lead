@@ -21,6 +21,9 @@ class ExotelVoiceProvider(VoiceProvider):
         self._timeout = timeout
 
     def place(self, call: OutboundCall) -> CallResult:
+        if call.script.relay is not None:
+            return CallResult(accepted=False, provider=self.name, error_code="AI_UNSUPPORTED",
+                              error_message="AI agents need the Twilio provider for live calls")
         data = {
             "From": call.to,
             "CallerId": call.caller_id,

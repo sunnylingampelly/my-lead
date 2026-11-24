@@ -11,9 +11,10 @@ Last updated: 2026-11-18
 | 5. Voice | Providers, audio library, TTS, campaigns, calling windows, callbacks | **Complete** |
 | 6. Automation | React Flow builder, workflow engine | **Complete** |
 | 7. Billing and analytics | Wallet ledger (INR/USD), credits, usage, analytics | **Complete** |
-| 8. Hardening | Platform admin, payments, monitoring, Docker deployment | **Complete**, except running Docker and MySQL (not available on the dev machine) |
+| 8. Hardening | Platform admin, payments, monitoring, Docker deployment | **Complete**, except running Docker (not available on the dev machine) |
+| 9. CRM | Companies, pipelines, deals, board, tasks, notes, timeline, lead scoring, assignment, SLA, reports, automation | **Complete (v1)** |
 
-Verification: 134 backend tests (pytest) and 17 browser end-to-end tests (Playwright) pass
+Verification: 148 backend tests (pytest) and the browser end-to-end tests (Playwright, including CRM) pass
 against the running app.
 
 ## India and United States support
@@ -52,6 +53,34 @@ advice, and the UI says so.
   export disabled, under a banner they can end at any time. The session is written to the
   customer's audit log and their owners and admins are notified. Removing a staff member ends their
   sessions.
+
+## Phase 9: CRM (what works)
+
+* **Companies:** India fields (GSTIN with checksum, PAN derived from GSTIN, GST treatment, state),
+  domain normalised from the website, duplicate warnings on domain, GSTIN, phone and name (409 with
+  matches; "create anyway"), linked contacts, owner, open deal value.
+* **Pipelines and deals:** a default sales pipeline and lost reasons per application; several
+  pipelines with ordered stages, probability and "rotting" days per stage. Deals have amount
+  (INR/USD), close date, owner, contact, company, extra people with roles and a probability
+  override. Kanban board with count, total and weighted total per stage and drag to move; Lost
+  requires a reason; won marks the contact a customer; stage history with time in each stage.
+* **Work:** tasks (type, priority, due date, assignee, reminders 15 minutes before due), notes with
+  `@mentions` that notify teammates, logged calls, meetings, WhatsApp and visits. One timeline per
+  contact, deal or company merges CRM work with the campaign email, SMS and call history.
+* **Leads:** owner, lifecycle stage and scores on every contact. Rule-based scoring: fit rules on
+  contact and company fields plus engagement points for opens, clicks, SMS replies, answered
+  calls, notes and activities within a rolling window, graded A1–C3 with a "hot" threshold.
+  Round-robin assignment rules (by source, location, lifecycle or segment, with per-person caps)
+  and a first-response SLA that flags and notifies on breach.
+* **Reports:** weighted forecast by close month (commit / best case / won), win/loss with lost
+  reasons and sales cycle, stage conversion, and a leaderboard.
+* **Automation:** triggers for deal created, moved, won, lost and going cold, hot score reached,
+  SLA missed and owner assigned; a "CRM action" step that creates deals or tasks, assigns owners,
+  moves deals and sets lifecycle stages.
+* **Permissions:** `crm.read`, `crm.write`, `crm.manage` (pipelines, rules, settings).
+* Background work (assignment, SLA, rotting, reminders, scoring every 10 minutes) runs every minute
+  from Celery Beat or the local scheduler. Next for CRM: IndiaMART/JustDial/Meta lead capture,
+  WhatsApp, duplicate merge, goals/quotas.
 
 ## Phase 8: Hardening (what works)
 
@@ -184,12 +213,16 @@ advice, and the UI says so.
   deferred campaigns are picked up by Celery Beat or the local scheduler thread.
 * **Cost:** per-part prices by country and category (₹ for India, $ for the US), an estimate
   before sending and actual cost from accepted parts afterwards.
-* **Receipts and replies:** Twilio status and inbound callbacks verified with the
-  `X-Twilio-Signature` header; MSG91 delivery reports and inbound messages with a shared token;
-  a signed simulation hook. All stored raw, deduplicated and processed in the background.
+* **Provider: Amazon SNS** for both countries. India sends with the DLT header as sender ID plus
+  the DLT entity and template IDs; the US sends from a registered origination number (10DLC,
+  toll-free or short code). Throttling and 5xx errors are retried; other rejections are final.
+* **Receipts and replies:** delivery receipts are read every minute from SNS delivery status logs
+  in CloudWatch (success and failure groups). Replies arrive from an SNS topic (two-way SMS in AWS
+  End User Messaging) at `/webhooks/sms/sns`, verified by SNS signature. A signed simulation hook
+  covers development. All stored raw, deduplicated and processed in the background.
   STOP, UNSUBSCRIBE and similar keywords revoke SMS consent and suppress the number (even for
   unknown numbers); START restores consent only for people who opted out, recording the reply as
-  evidence. Twilio error 21610 revokes consent; invalid-number errors suppress the number.
+  evidence. An "opted out" delivery failure revokes consent; invalid-number failures suppress the number.
 * **Reports:** recipients, sent, delivery rate, undelivered and failed, parts and cost, a
   sent/delivered timeline, failure reasons and a filterable recipient list.
 * **Simulation:** texts go to a local outbox viewable at `/dev/sms`. Numbers ending 0000 are
@@ -276,7 +309,7 @@ advice, and the UI says so.
 * Handles spreadsheet numeric phones, BOMs, semicolon CSVs and Windows-1252 files.
 * Restart-safe: each source row is recorded once, so a crashed or redelivered job resumes
   without duplicates. A test simulates a worker crash mid-import to prove it.
-* 5,000 rows import in about 5 seconds on SQLite.
+* 5,000 rows import in about 5 seconds.
 
 **Segments, lists, tags, custom fields**
 * Visual builder with nested AND/OR groups, 15 operators, custom fields, tags, lists and
@@ -299,18 +332,18 @@ advice, and the UI says so.
 
 ## Known gaps
 
-* **Docker, MySQL and Celery with Redis have not been run.** Docker and MySQL are not installed on
-  the development machine. Development runs on SQLite with background jobs in local threads. The
-  migrations compile to MySQL DDL and the compose files are written; run them on a staging server
-  before going live.
-* SQLite allows one writer at a time, so the API slows slightly while a large import runs in
-  development. MySQL does not have this limit.
+* **MySQL only.** SQLite support was removed. Development and the test suite run on MariaDB 10.4
+  (XAMPP); production targets MySQL 8. All migrations upgrade and downgrade cleanly on MariaDB.
+  Docker and Celery with Redis have not been run yet; development uses local background threads.
 * Flag emoji render as letters (IN, US) on Windows.
-* End-to-end tests run one browser at a time because SQLite allows one writer; MySQL lifts this.
+* End-to-end tests still run one browser at a time (`workers: 1`); this can be raised now that
+  SQLite is gone.
 * Contact "last activity" stays empty until campaigns record engagement.
 * Notifications, platform admin and the Brevo/SES live checks are still outstanding from Phase 1.
-* The MSG91 and Twilio SMS adapters follow the providers' documented APIs but have not been run
-  against the live services. MSG91 delivery-report field names should be confirmed per account.
+* The Amazon SNS SMS adapter follows AWS's documented API but has not been run against a live
+  account. Live use needs: SNS SMS out of the sandbox, a registered DLT entity, headers and templates
+  (India), a registered origination number (US), delivery status logging enabled in SNS, and an
+  SNS topic for two-way SMS subscribed to `/api/v1/webhooks/sms/sns`.
 * SMS prices are platform configuration (`SMS_PRICING`); per-organization pricing and wallet
   deductions arrive with billing in Phase 7.
 * Toll-free verification and short-code approval are recorded only through the sender
@@ -338,7 +371,7 @@ advice, and the UI says so.
 
 1. Run `docker-compose.prod.yml` on a staging server with MySQL and Redis, and repeat the
    end-to-end suite against it.
-2. Connect real provider accounts one at a time in test mode (Brevo or SES, MSG91, Twilio, Telnyx,
+2. Connect real provider accounts one at a time in test mode (Brevo or SES, Amazon SNS, Twilio, Telnyx,
    Stripe, Razorpay), then switch `COMMUNICATION_MODE=live`.
 3. National Do Not Call checks (US DNC, India DND/NCPR), incremental segment membership for very
    large segments, and daylight-saving-aware analytics.

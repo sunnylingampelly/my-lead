@@ -12,7 +12,18 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Perm
-from app.models import Contact, ContactAttributeDefinition, ContactList, ContactListMember, ContactTag, Segment, Tag
+from app.models import (
+    Company,
+    Contact,
+    ContactAttributeDefinition,
+    ContactList,
+    ContactListMember,
+    ContactTag,
+    Deal,
+    PipelineStage,
+    Segment,
+    Tag,
+)
 from app.schemas.audience import SegmentCreate, SegmentGroup, SegmentPreview, SegmentUpdate
 from app.services import audit_service
 from app.services.audience.normalize import parse_date
@@ -55,6 +66,22 @@ CORE_FIELDS: dict[str, tuple[str, str, Any]] = {
     "updated_at": ("Updated date", "date", Contact.updated_at),
     "last_activity_at": ("Last activity", "date", Contact.last_activity_at),
 }
+# CRM fields on the contact.
+CRM_FIELDS: dict[str, tuple[str, str, Any]] = {
+    "lifecycle_stage": ("Lifecycle stage", "select", Contact.lifecycle_stage),
+    "lead_score": ("Lead score", "number", Contact.lead_score),
+    "fit_score": ("Fit score", "number", Contact.fit_score),
+    "engagement_score": ("Engagement score", "number", Contact.engagement_score),
+}
+# Fields of the contact's linked CRM company: key -> (label, type, column).
+COMPANY_FIELDS: dict[str, tuple[str, str, Any]] = {
+    "company.name": ("Company name", "text", Company.name),
+    "company.industry": ("Company industry", "text", Company.industry),
+    "company.size": ("Company size", "select", Company.size),
+    "company.country": ("Company country", "text", Company.country),
+}
+LIFECYCLE_OPTIONS = ["subscriber", "lead", "mql", "sql", "opportunity", "customer", "other"]
+COMPANY_SIZES = ["1-10", "11-50", "51-200", "201-1000", "1000+"]
 STATUS_OPTIONS = ["active", "unsubscribed", "bounced", "blocked"]
 OPS_BY_TYPE = {"text": TEXT_OPS, "number": NUMBER_OPS, "date": DATE_OPS, "boolean": BOOL_OPS, "select": SELECT_OPS}
 
@@ -71,6 +98,7 @@ def field_catalog(db: Session, ctx: AppContext) -> dict:
     for d in db.scalars(defs.order_by(ContactAttributeDefinition.label)):
         fields.append({"key": f"attr.{d.key}", "label": d.label, "type": d.data_type, "group": "Custom fields",
                        "operators": OPS_BY_TYPE[d.data_type], "options": d.options or []})
+    fields += _crm_catalog(db, ctx)
     fields.append({"key": "tag", "label": "Tag", "type": "tag", "group": "Membership",
                    "operators": ["has_tag", "not_has_tag"]})
     fields.append({"key": "list", "label": "List", "type": "list", "group": "Membership",
@@ -82,6 +110,37 @@ def field_catalog(db: Session, ctx: AppContext) -> dict:
     lists = [{"id": li.id, "name": li.name} for li in db.scalars(
         select(ContactList).where(ContactList.application_id == ctx.application_id).order_by(ContactList.name))]
     return {"fields": fields, "tags": tags, "lists": lists}
+
+
+def _crm_catalog(db: Session, ctx: AppContext) -> list[dict]:
+    """CRM and company fields. Select fields carry option_labels so ids can be shown as names."""
+    from app.services.crm.common import team
+
+    owners = [{"value": "unassigned", "label": "Unassigned"}]
+    owners += sorted(({"value": u.id, "label": u.full_name or u.email} for u in team(
+        db, ctx.organization_id, ctx.application_id).values()), key=lambda o: o["label"].lower())
+    stages = [{"value": st.id, "label": st.name} for st in db.scalars(
+        select(PipelineStage).where(PipelineStage.application_id == ctx.application_id, PipelineStage.kind == "open")
+        .order_by(PipelineStage.pipeline_id, PipelineStage.position))]
+    out = [{"key": "owner", "label": "Owner", "type": "select", "group": "CRM", "operators": ["is", "is_not"],
+            "options": [o["value"] for o in owners], "option_labels": {o["value"]: o["label"] for o in owners}}]
+    for k, (label, t, _) in CRM_FIELDS.items():
+        out.append({"key": k, "label": label, "type": t, "group": "CRM",
+                    "operators": ["is", "is_not"] if t == "select" else OPS_BY_TYPE[t],
+                    **({"options": LIFECYCLE_OPTIONS} if k == "lifecycle_stage" else {})})
+    out += [
+        {"key": "has_open_deal", "label": "Has an open deal", "type": "boolean", "group": "CRM", "operators": ["is"]},
+        {"key": "deal_stage", "label": "Has a deal in stage", "type": "select", "group": "CRM",
+         "operators": ["is", "is_not"], "options": [st["value"] for st in stages],
+         "option_labels": {st["value"]: st["label"] for st in stages}},
+        {"key": "sla_breached", "label": "First-response time missed", "type": "boolean", "group": "CRM",
+         "operators": ["is"]},
+    ]
+    for k, (label, t, _) in COMPANY_FIELDS.items():
+        out.append({"key": k, "label": label, "type": t, "group": "Company",
+                    "operators": SELECT_OPS if t == "select" else TEXT_OPS,
+                    **({"options": COMPANY_SIZES} if k == "company.size" else {})})
+    return out
 
 
 class _Compiler:
@@ -135,6 +194,9 @@ class _Compiler:
             e = eligibility_condition(value)
             return e if op == "is" else not_(e)
 
+        if field in ("owner", "has_open_deal", "deal_stage", "sla_breached") or field in COMPANY_FIELDS:
+            return self._crm(field, op, value, path)
+
         if field.startswith("attr."):
             defn = self.attrs.get(field[5:])
             if defn is None:
@@ -146,6 +208,9 @@ class _Compiler:
         elif field in CORE_FIELDS:
             _, ftype, col = CORE_FIELDS[field]
             options = STATUS_OPTIONS if field == "status" else []
+        elif field in CRM_FIELDS:
+            _, ftype, col = CRM_FIELDS[field]
+            options = LIFECYCLE_OPTIONS if field == "lifecycle_stage" else []
         else:
             self.fail(path, f"Unknown field '{field}'")
         if op not in OPS_BY_TYPE[ftype]:
@@ -181,6 +246,55 @@ class _Compiler:
                    "starts_with": f"{escape_like(text)}%", "ends_with": f"%{escape_like(text)}"}[op]
         like = lc.like(pattern, escape="\\")
         return or_(col.is_(None), not_(like)) if op == "not_contains" else like
+
+    def _crm(self, field: str, op: str, value, path: str):
+        if field == "owner":
+            if op not in ("is", "is_not") or not value:
+                self.fail(path, "Choose an owner")
+            if value == "unassigned":
+                cond = Contact.owner_id.is_(None)
+                return cond if op == "is" else not_(cond)
+            user = getattr(self.ctx, "user", None)
+            uid = user.id if value == "me" and user else str(value)
+            return Contact.owner_id == uid if op == "is" else or_(Contact.owner_id.is_(None),
+                                                                    Contact.owner_id != uid)
+        if field in ("has_open_deal", "sla_breached"):
+            if op != "is":
+                self.fail(path, f"Operator '{op}' is not valid for yes/no fields")
+            v = self._bool(value, path)
+            if field == "has_open_deal":
+                cond = exists().where(Deal.contact_id == Contact.id, Deal.status == "open")
+            else:
+                cond = and_(Contact.sla_breached_at.is_not(None), Contact.first_response_at.is_(None))
+            return cond if v else not_(cond)
+        if field == "deal_stage":
+            if op not in ("is", "is_not") or not value:
+                self.fail(path, "Choose a pipeline stage")
+            if not self.db.scalar(select(PipelineStage.id).where(
+                    PipelineStage.id == str(value), PipelineStage.application_id == self.ctx.application_id)):
+                self.fail(path, "Choose a pipeline stage")
+            cond = exists().where(Deal.contact_id == Contact.id, Deal.stage_id == str(value))
+            return cond if op == "is" else not_(cond)
+        # company.*: a condition on the linked CRM company
+        _, ftype, col = COMPANY_FIELDS[field]
+        if op not in (SELECT_OPS if ftype == "select" else TEXT_OPS):
+            self.fail(path, f"Operator '{op}' is not valid for {ftype} fields")
+        linked = Company.id == Contact.company_id
+        if op == "is_empty":
+            return not_(exists().where(linked, col.is_not(None), col != ""))
+        if op == "is_not_empty":
+            return exists().where(linked, col.is_not(None), col != "")
+        if ftype == "select" and str(value) not in COMPANY_SIZES:
+            self.fail(path, "Choose one of the allowed values")
+        text = self._text(value, path)
+        lc = func.lower(col)
+        if op in ("is", "is_not"):
+            cond = exists().where(linked, lc == text)
+            return cond if op == "is" else not_(cond)
+        pattern = {"contains": f"%{escape_like(text)}%", "not_contains": f"%{escape_like(text)}%",
+                   "starts_with": f"{escape_like(text)}%", "ends_with": f"%{escape_like(text)}"}[op]
+        cond = exists().where(linked, lc.like(pattern, escape="\\"))
+        return not_(cond) if op == "not_contains" else cond
 
     def _text(self, value, path) -> str:
         if value is None or not str(value).strip():

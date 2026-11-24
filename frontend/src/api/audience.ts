@@ -32,7 +32,14 @@ export function cleanFilters(f: ContactFilters): Record<string, string> {
   return Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== null && v !== '')) as Record<string, string>
 }
 
-export type BulkAction = 'delete' | 'add_tag' | 'remove_tag' | 'add_to_list' | 'remove_from_list'
+export type BulkAction =
+  | 'delete'
+  | 'add_tag'
+  | 'remove_tag'
+  | 'add_to_list'
+  | 'remove_from_list'
+  | 'assign_owner'
+  | 'set_lifecycle'
 
 export const audienceApi = (appId: string) => {
   const b = `/apps/${appId}`
@@ -45,7 +52,15 @@ export const audienceApi = (appId: string) => {
     createContact: (body: ContactInput) => data(http.post<ContactDetail>(`${b}/contacts`, body)),
     updateContact: (id: string, body: ContactInput) => data(http.patch<ContactDetail>(`${b}/contacts/${id}`, body)),
     deleteContact: (id: string) => data(http.delete(`${b}/contacts/${id}`)),
-    bulk: (body: { action: BulkAction; contact_ids?: string[]; filters?: ContactFilters; tag_id?: string; list_id?: string }) =>
+    bulk: (body: {
+      action: BulkAction
+      contact_ids?: string[]
+      filters?: ContactFilters
+      tag_id?: string
+      list_id?: string
+      owner_id?: string | null
+      lifecycle_stage?: string
+    }) =>
       data(http.post<{ matched: number; affected: number }>(`${b}/contacts/bulk`, {
         ...body,
         filters: body.filters ? cleanFilters(body.filters) : undefined,
@@ -79,6 +94,8 @@ export const audienceApi = (appId: string) => {
     updateList: (id: string, body: { name?: string; description?: string | null }) =>
       data(http.patch<ContactListInfo>(`${b}/lists/${id}`, body)),
     deleteList: (id: string) => data(http.delete(`${b}/lists/${id}`)),
+    addToList: (id: string, contact_ids: string[]) =>
+      data(http.post<{ added: number }>(`${b}/lists/${id}/contacts`, { contact_ids })),
     removeFromList: (id: string, contact_ids: string[]) =>
       data(http.delete<{ removed: number }>(`${b}/lists/${id}/contacts`, { data: { contact_ids } })),
 

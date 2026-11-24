@@ -1,50 +1,46 @@
-/** Voice overview, campaigns, audio library and caller IDs. */
+/** Voice overview, campaigns and the audio library. AI agents have their own pages; Signalcraft picks caller numbers automatically. */
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   AudioLines,
+  Bot,
   CalendarClock,
-  CheckCircle2,
   CircleDollarSign,
   Clock,
   Mic,
   MoreHorizontal,
   Pencil,
-  Phone,
   PhoneCall,
   PhoneIncoming,
   Plus,
   Search,
-  ShieldCheck,
-  Star,
   Trash2,
-  TriangleAlert,
   Upload,
   UserMinus,
-  XCircle,
 } from 'lucide-react'
-import { useAudio, useCallers, useVoiceCampaigns, useVoiceOptions, useVoiceOverview, voiceApi, vqk } from '@/api/voice'
+import { useAudio, useVoiceCampaigns, useVoiceOptions, useVoiceOverview, voiceApi, vqk } from '@/api/voice'
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Field, Input, Select } from '@/components/ui/form-controls'
+import { Field, Input } from '@/components/ui/form-controls'
 import { Badge, Skeleton } from '@/components/ui/misc'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Pagination, StatCard } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
-import type { CallerId, CallerKind, VoiceAudio, VoiceCampaignListItem, VoiceLanguage } from '@/types/voice'
+import type { VoiceAudio, VoiceCampaignListItem, VoiceLanguage } from '@/types/voice'
 import { CampaignStatusBadge, pct } from '../email/components'
 import { formatMoney } from '../sms/format'
 import { TtsForm } from './components'
-import { CALLER_KIND_LABEL, CATEGORY_LABEL, formatDuration } from './format'
+import { CATEGORY_LABEL, formatDuration } from './format'
 import { NewVoiceCampaignButton } from './VoiceCampaignEditorPage'
+import { SetupChecklist } from '../email/campaignKit'
 
 function useCrumbs(label: string) {
   const { app, org } = useWorkspace()
@@ -65,30 +61,32 @@ export function VoiceOverviewPage() {
   const f = (n: number) => formatCount(n, app!.default_country)
   const base = `/apps/${app!.id}/voice`
   const spend = q.data ? Object.entries(q.data.last_30_days.spend) : []
-  const noCaller = q.data && !q.data.callers.active
   return (
     <>
       <PageHeader breadcrumbs={useCrumbs('Overview')} title="Voice" description="Automated calls over the last 30 days, from provider call records." actions={can('campaigns.write') && <NewVoiceCampaignButton />} />
-      {q.data && can('settings.write') && (noCaller || !q.data.audio_count) && (
-        <div className="mb-6 rounded-lg border border-warning-border bg-warning-soft p-4 text-sm text-warning-strong" data-testid="voice-setup">
-          <div className="mb-3 flex items-center gap-2 font-semibold">
-            <TriangleAlert className="size-4" /> Finish voice setup before your first campaign
-          </div>
-          <ol className="grid gap-2 md:grid-cols-2">
-            <li className="flex items-center gap-2">
-              {noCaller ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4 text-success-strong" />}
-              <Link className="underline" to={`${base}/callers`}>
-                Add and confirm a caller ID
-              </Link>
-            </li>
-            <li className="flex items-center gap-2">
-              {!q.data.audio_count ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4 text-success-strong" />}
-              <Link className="underline" to={`${base}/audio`}>
-                Record or write a message
-              </Link>
-            </li>
-          </ol>
-        </div>
+      {q.data && (
+        <SetupChecklist
+          testId="voice-setup"
+          title="Finish voice setup before your first campaign"
+          items={[
+            ...(q.data.setup.default_country !== 'US'
+              ? [{ key: 'dlt', label: 'DLT registration (shared by SMS and voice)', done: q.data.setup.dlt_registered, to: `${base}/registration`, term: 'pe_id' }]
+              : []),
+            {
+              key: 'message',
+              label: 'Record a message, write one, or create an AI agent',
+              done: !!q.data.audio_count || !!(q.data.agents && Object.keys(q.data.agents).length),
+              to: q.data.audio_count ? `${base}/audio` : `${base}/agents`,
+            },
+            {
+              key: 'consent',
+              label: q.data.setup.default_country === 'US' ? 'Contacts with call consent (TCPA)' : 'Contacts with call consent',
+              done: q.data.setup.consented > 0,
+              to: `/apps/${app!.id}/audience/import`,
+              term: q.data.setup.default_country === 'US' ? 'tcpa' : 'consent',
+            },
+          ]}
+        />
       )}
       {q.isLoading ? (
         <Skeleton className="h-64 w-full" />
@@ -104,16 +102,16 @@ export function VoiceOverviewPage() {
               <StatCard label="Spend" value={spend.length ? spend.map(([cur, v]) => formatMoney(v, cur)).join(' + ') : '—'} icon={CircleDollarSign} hint="Minutes × per-minute price" />
               <StatCard label="Opt-outs" value={f(q.data.last_30_days.opted_out)} icon={UserMinus} hint="Pressed 9 during a call" />
             </div>
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
-                <CardHeader className="flex-row items-center justify-between">
+                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle>Recent campaigns</CardTitle>
                   <Button variant="link" size="sm" asChild>
                     <Link to={`${base}/campaigns`}>All campaigns</Link>
                   </Button>
                 </CardHeader>
                 {q.data.recent.length === 0 ? (
-                  <EmptyState icon={PhoneCall} title="No voice campaigns yet" description="Pick a message, an audience and a caller ID, and the platform handles calling hours, retries and opt-outs." action={can('campaigns.write') && <NewVoiceCampaignButton variant="outline" />} />
+                  <EmptyState icon={PhoneCall} title="No voice campaigns yet" description="Pick a phone number, a message or an AI agent and an audience, and the platform handles calling hours, retries and opt-outs." action={can('campaigns.write') && <NewVoiceCampaignButton variant="outline" />} />
                 ) : (
                   <ul className="divide-y border-t">
                     {q.data.recent.map((c) => (
@@ -174,8 +172,8 @@ export function VoiceOverviewPage() {
                         </Link>
                       </Button>
                       <Button variant="outline" className="justify-start" asChild>
-                        <Link to={`${base}/callers`}>
-                          <Phone /> Caller IDs ({q.data.callers.active ?? 0} approved)
+                        <Link to={`${base}/agents`}>
+                          <Bot /> AI agents ({q.data.agents?.active ?? 0} active)
                         </Link>
                       </Button>
                     </div>
@@ -531,254 +529,6 @@ export function VoiceAudioPage() {
             setDel(null)
           }
         }}
-      />
-    </>
-  )
-}
-
-// ------------------------------------------------------------------ caller IDs
-
-const KINDS: Record<'IN' | 'US', CallerKind[]> = { IN: ['series_140', 'series_160'], US: ['local', 'toll_free'] }
-const PLACEHOLDER: Record<CallerKind, string> = { series_140: '+911401234567', series_160: '+911601234567', local: '+14155550100', toll_free: '+18885550100' }
-
-function AddCallerDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { app } = useWorkspace()
-  const qc = useQueryClient()
-  const first: 'IN' | 'US' = app!.default_country === 'US' ? 'US' : 'IN'
-  const [country, setCountry] = useState<'IN' | 'US'>(first)
-  const [kind, setKind] = useState<CallerKind>(KINDS[first][0]!)
-  const [number, setNumber] = useState('')
-  const [label, setLabel] = useState('')
-  const [provider, setProvider] = useState<'simulation' | 'telnyx' | 'exotel' | 'twilio'>('simulation')
-  const telnyx = useQuery({ queryKey: ['voice', app!.id, 'telnyx-numbers'], queryFn: () => voiceApi(app!.id).providerNumbers(), enabled: open, staleTime: 60_000, retry: false })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    if (open) {
-      setNumber('')
-      setLabel('')
-      setError(null)
-    }
-  }, [open])
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add a caller ID</DialogTitle>
-          <DialogDescription>A number your business owns and has registered. You confirm it on the next step.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Country">
-            {(['IN', 'US'] as const).map((c) => (
-              <button
-                key={c}
-                role="radio"
-                aria-checked={country === c}
-                onClick={() => {
-                  setCountry(c)
-                  setKind(KINDS[c][0]!)
-                  setProvider('simulation')
-                }}
-                className={cn('rounded-lg border px-3 py-2.5 text-sm font-medium transition', country === c ? 'border-primary bg-accent/50' : 'text-muted-foreground hover:bg-muted')}
-              >
-                {c === 'IN' ? '🇮🇳 India' : '🇺🇸 United States'}
-              </button>
-            ))}
-          </div>
-          <Field label="Number type" htmlFor="cl-kind">
-            <Select id="cl-kind" value={kind} onChange={(e) => setKind(e.target.value as CallerKind)}>
-              {KINDS[country].map((k) => (
-                <option key={k} value={k}>
-                  {CALLER_KIND_LABEL[k]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          {telnyx.data?.configured && !!telnyx.data.numbers.length && (
-            <Field label="Numbers on your Telnyx account" htmlFor="cl-tx" hint="Picking one fills in the number and sets Telnyx as the provider.">
-              <Select
-                id="cl-tx"
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return
-                  setNumber(e.target.value)
-                  setProvider('telnyx')
-                }}
-              >
-                <option value="">Choose a number…</option>
-                {telnyx.data.numbers.map((n) => (
-                  <option key={n.number} value={n.number}>
-                    {n.number}
-                    {n.label ? ` · ${n.label}` : ''}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          )}
-          <Field label="Number" htmlFor="cl-num" error={error ?? undefined} hint="International format with the country code.">
-            <Input id="cl-num" value={number} onChange={(e) => setNumber(e.target.value)} placeholder={PLACEHOLDER[kind]} className="font-mono" />
-          </Field>
-          <Field label="Label (optional)" htmlFor="cl-label">
-            <Input id="cl-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Head office" />
-          </Field>
-          <Field label="Provider" htmlFor="cl-prov" hint="Simulation never dials anyone. Live providers are used only after the platform is switched to live mode.">
-            <Select id="cl-prov" value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
-              <option value="simulation">Simulation</option>
-              <option value="telnyx">Telnyx</option>
-              {country === 'IN' && <option value="exotel">Exotel</option>}
-              <option value="twilio">Twilio</option>
-            </Select>
-          </Field>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            loading={busy}
-            disabled={!number.trim()}
-            onClick={async () => {
-              setBusy(true)
-              setError(null)
-              try {
-                await voiceApi(app!.id).createCaller({ number, country, kind, provider, label: label || null })
-                await qc.invalidateQueries({ queryKey: vqk.all(app!.id) })
-                toast.success('Caller ID added. Confirm it to start using it.')
-                onOpenChange(false)
-              } catch (e) {
-                setError(errorMessage(e))
-              } finally {
-                setBusy(false)
-              }
-            }}
-          >
-            Add caller ID
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-export function VoiceCallersPage() {
-  const { app, can } = useWorkspace()
-  const q = useCallers(app!.id)
-  const qc = useQueryClient()
-  const [add, setAdd] = useState(false)
-  const [attest, setAttest] = useState<CallerId | null>(null)
-  const [del, setDel] = useState<CallerId | null>(null)
-  const [busy, setBusy] = useState(false)
-  const write = can('settings.write')
-  const act = async (fn: () => Promise<unknown>, msg: string) => {
-    setBusy(true)
-    try {
-      await fn()
-      await qc.invalidateQueries({ queryKey: vqk.all(app!.id) })
-      toast.success(msg)
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusy(false)
-      setAttest(null)
-      setDel(null)
-    }
-  }
-  return (
-    <>
-      <PageHeader breadcrumbs={useCrumbs('Caller IDs')} title="Caller IDs" description="Numbers your calls come from: 140 and 160-series numbers in India, local or toll-free numbers in the US." actions={write && <Button onClick={() => setAdd(true)}><Plus /> Add caller ID</Button>} />
-      <Card>
-        {q.isLoading ? (
-          <LoadingRows />
-        ) : q.isError ? (
-          <ErrorState error={q.error} onRetry={() => q.refetch()} />
-        ) : !q.data?.length ? (
-          <EmptyState icon={Phone} title="No caller IDs yet" description="Add the number people will see when you call them." action={write && <Button variant="outline" onClick={() => setAdd(true)}>Add caller ID</Button>} />
-        ) : (
-          <Table>
-            <THead>
-              <TR>
-                <TH>Number</TH>
-                <TH>Type</TH>
-                <TH>Provider</TH>
-                <TH>Status</TH>
-                <TH className="w-10" />
-              </TR>
-            </THead>
-            <TBody>
-              {q.data.map((c) => (
-                <TR key={c.id}>
-                  <TD>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-semibold">{c.number}</span>
-                      {c.is_default && (
-                        <Badge variant="secondary">
-                          <Star className="size-3" /> Default
-                        </Badge>
-                      )}
-                    </div>
-                    {c.label && <div className="text-xs text-muted-foreground">{c.label}</div>}
-                  </TD>
-                  <TD className="text-sm text-muted-foreground">
-                    {c.country} · {CALLER_KIND_LABEL[c.kind]}
-                  </TD>
-                  <TD className="text-sm capitalize">{c.provider}</TD>
-                  <TD>
-                    {c.status === 'active' ? (
-                      <Badge variant="success">Approved {c.attested_at && `· ${formatDate(c.attested_at)}`}</Badge>
-                    ) : write ? (
-                      <Button size="sm" variant="outline" onClick={() => setAttest(c)}>
-                        <ShieldCheck /> Confirm ownership
-                      </Button>
-                    ) : (
-                      <Badge variant="warning">Not confirmed</Badge>
-                    )}
-                  </TD>
-                  <TD>
-                    {write && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" aria-label={`Actions for ${c.number}`}>
-                            <MoreHorizontal />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {!c.is_default && <DropdownMenuItem onSelect={() => act(() => voiceApi(app!.id).defaultCaller(c.id), `${c.number} is now the default`)}>Make default</DropdownMenuItem>}
-                          <DropdownMenuItem className="text-destructive" onSelect={() => setDel(c)}>
-                            Remove
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        )}
-      </Card>
-      <AddCallerDialog open={add} onOpenChange={setAdd} />
-      <ConfirmDialog
-        open={!!attest}
-        onOpenChange={(o) => !o && setAttest(null)}
-        title={`Confirm ${attest?.number} is yours?`}
-        description={
-          attest?.country === 'IN'
-            ? 'You confirm this number was allotted to your business in the correct TRAI series and is registered under your DLT entity. Your name and the time are recorded.'
-            : 'You confirm your business owns this number and it is provisioned with your provider (STIR/SHAKEN). Your name and the time are recorded.'
-        }
-        confirmLabel="I confirm"
-        loading={busy}
-        onConfirm={() => act(() => voiceApi(app!.id).attestCaller(attest!.id), 'Caller ID approved')}
-      />
-      <ConfirmDialog
-        open={!!del}
-        onOpenChange={(o) => !o && setDel(null)}
-        title={`Remove ${del?.number}?`}
-        description="Draft campaigns using it will need a new caller ID."
-        confirmLabel="Remove"
-        destructive
-        loading={busy}
-        onConfirm={() => act(() => voiceApi(app!.id).deleteCaller(del!.id), 'Caller ID removed')}
       />
     </>
   )

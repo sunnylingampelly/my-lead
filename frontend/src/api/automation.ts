@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { http } from './client'
 import type { Page } from '@/types/api'
 
-export type NodeType = 'trigger' | 'send_email' | 'send_sms' | 'voice_call' | 'wait' | 'condition' | 'split' | 'update_contact' | 'end'
+export type NodeType = 'trigger' | 'send_email' | 'send_sms' | 'voice_call' | 'wait' | 'condition' | 'split' | 'update_contact' | 'crm_action' | 'end'
 
 export interface FlowNode {
   id: string
@@ -74,10 +74,48 @@ export interface RunStep {
   node_id: string
   node_type: NodeType
   label: string
+  /** What the step does, e.g. "Create task: Follow up with {{name}}". */
+  summary: string | null
   outcome: string
   detail: string | null
+  /** Records the step created (CRM task / deal). */
+  links: { kind: 'task' | 'deal'; id: string; label: string }[]
   at: string
 }
+
+export interface TestStep {
+  node_id: string | null
+  label: string
+  outcome: string
+  detail: string
+}
+
+export interface TestResult {
+  contact_id: string
+  contact: string
+  graph: 'draft' | 'published'
+  steps: TestStep[]
+}
+
+export interface EnrollResult {
+  enrolled: number
+  skipped: number
+  message: string
+}
+
+/** One entry of a contact's workflow history (GET /automation/runs?contact_id=). */
+export interface ContactRun {
+  run_id: string
+  workflow_id: string
+  workflow_name: string
+  status: WorkflowRun['status']
+  current_step: string | null
+  started_at: string
+  finished_at: string | null
+  exit_reason: string | null
+}
+
+export type EnrollBody = { contact_ids: string[] } | { list_id: string } | { segment_id: string }
 
 const data = <T>(p: Promise<{ data: T }>) => p.then((r) => r.data)
 
@@ -90,7 +128,11 @@ export const automationApi = (appId: string) => {
     create: (body: { name: string; description?: string | null; graph?: WorkflowGraph }) => data(http.post<Workflow>(b, body)),
     update: (id: string, body: { name?: string; description?: string | null; allow_reentry?: boolean; graph?: WorkflowGraph }) =>
       data(http.patch<Workflow>(`${b}/${id}`, body)),
-    validate: (id: string) => data(http.get<{ valid: boolean; issues: WorkflowIssue[] }>(`${b}/${id}/validate`)),
+    validate: (id: string) => data(http.get<{ valid: boolean; issues: WorkflowIssue[]; warnings?: WorkflowIssue[] }>(`${b}/${id}/validate`)),
+    test: (id: string, contactId: string, graph: 'draft' | 'published' = 'draft') =>
+      data(http.post<TestResult>(`${b}/${id}/test`, { contact_id: contactId, graph })),
+    enroll: (id: string, body: EnrollBody) => data(http.post<EnrollResult>(`${b}/${id}/enroll`, body)),
+    contactRuns: (contactId: string) => data(http.get<ContactRun[]>(`/apps/${appId}/automation/runs`, { params: { contact_id: contactId } })),
     publish: (id: string, activate = true) => data(http.post<Workflow>(`${b}/${id}/publish`, { activate })),
     pause: (id: string) => data(http.post<Workflow>(`${b}/${id}/pause`)),
     resume: (id: string) => data(http.post<Workflow>(`${b}/${id}/resume`)),
@@ -98,7 +140,7 @@ export const automationApi = (appId: string) => {
     duplicate: (id: string) => data(http.post<Workflow>(`${b}/${id}/duplicate`)),
     remove: (id: string) => data(http.delete(`${b}/${id}`)),
     stats: (id: string) => data(http.get<WorkflowStats>(`${b}/${id}/stats`)),
-    runs: (id: string, p: { page: number; page_size: number; status?: string }) =>
+    runs: (id: string, p: { page: number; page_size: number; status?: string; search?: string }) =>
       data(http.get<Page<WorkflowRun>>(`${b}/${id}/runs`, { params: Object.fromEntries(Object.entries(p).filter(([, v]) => v)) })),
     runSteps: (id: string, runId: string) => data(http.get<{ steps: RunStep[] }>(`${b}/${id}/runs/${runId}`)),
     stopRun: (id: string, runId: string) => data(http.post(`${b}/${id}/runs/${runId}/stop`)),
@@ -119,5 +161,8 @@ export const useWorkflows = (appId: string, p: { page: number; page_size: number
 export const useWorkflow = (appId: string, id: string) => useQuery({ queryKey: wqk.one(appId, id), queryFn: () => automationApi(appId).get(id) })
 export const useWorkflowStats = (appId: string, id: string, enabled: boolean) =>
   useQuery({ queryKey: wqk.stats(appId, id), queryFn: () => automationApi(appId).stats(id), enabled, refetchInterval: enabled ? 10_000 : false })
-export const useWorkflowRuns = (appId: string, id: string, p: { page: number; page_size: number; status?: string }) =>
+export const useWorkflowRuns = (appId: string, id: string, p: { page: number; page_size: number; status?: string; search?: string }) =>
   useQuery({ queryKey: wqk.runs(appId, id, p), queryFn: () => automationApi(appId).runs(id, p), placeholderData: keepPreviousData, refetchInterval: 10_000 })
+/** A contact's workflow history, newest first. */
+export const useContactRuns = (appId: string, contactId: string, enabled = true) =>
+  useQuery({ queryKey: ['automation', appId, 'contact-runs', contactId], queryFn: () => automationApi(appId).contactRuns(contactId), enabled: enabled && !!contactId })

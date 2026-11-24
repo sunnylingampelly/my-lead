@@ -143,12 +143,41 @@ export interface SessionInfo {
   current: boolean
 }
 
+/** A getting-started step computed by the backend from real records, in dependency order. */
+export interface ChecklistItem {
+  key: string
+  label: string
+  done: boolean
+  href: string
+  cta: string
+  /** False when the viewer's role cannot do this step. */
+  available: boolean
+  optional: boolean
+  detail: string | null
+}
+
+export interface ProvidersStatus {
+  communication_mode: string
+  simulation: boolean
+  providers: { email: Record<string, boolean>; sms: Record<string, boolean>; voice: Record<string, boolean> }
+}
+
 export interface DashboardData {
   application: { id: string; name: string; timezone: string; created_at: string }
   your_role: RoleKey
   team: { with_access: number; organization_members: number; pending_invitations: number }
-  checklist: { key: string; label: string; done: boolean; available?: boolean; module?: string }[]
-  recent_activity: { id: string; action: string; summary: string | null; actor_name: string | null; created_at: string }[]
+  checklist: ChecklistItem[]
+  recent_activity: {
+    id: string
+    action: string
+    summary: string | null
+    actor_name: string | null
+    target_type: string | null
+    target_id: string | null
+    href: string | null
+    created_at: string
+  }[]
+  channels: Record<'audience' | 'email' | 'sms' | 'voice', { count_30d: number; ready: boolean; setup_href: string }>
   modules: Record<string, boolean>
   is_org_wide_role: boolean
   segment_count: number

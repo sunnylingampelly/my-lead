@@ -1,29 +1,67 @@
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { CheckCircle2, Clock, Globe2, Mail, MapPin, Pencil, Phone, Plus, Send, ShieldAlert, Trash2, XCircle } from 'lucide-react'
-import { audienceApi, aqk, useAttributes, useContact, useTags } from '@/api/audience'
+import { audienceApi, aqk, useAttributes, useContact } from '@/api/audience'
 import { ApiError, errorMessage } from '@/api/client'
+import { crmApi } from '@/api/crm'
 import { EmptyState, ErrorState, FullPageSpinner, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Field, Input, Textarea } from '@/components/ui/form-controls'
 import { Avatar, Badge } from '@/components/ui/misc'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CHANNEL_META, StatusBadge, TagChip } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { countryFlag, countryName } from '@/lib/regions'
-import { formatDate, formatDateTime, timeAgo } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
 import type { Channel, ContactDetail } from '@/types/audience'
+import { ContactCrmPanel } from '../crm/ContactCrmPanel'
+import { AddTagDialog, AddToListDialog, QuickActions, ReachChips, reachFromEligibility, WorkflowsCard } from '../crm/connect'
+import { KIND_META } from '../crm/format'
 import { ContactFormDialog } from './ContactFormDialog'
+
+/** Email, SMS and call history from campaigns (and SMS replies), newest first. */
+function CampaignHistory({ appId, contactId }: { appId: string; contactId: string }) {
+  const q = useQuery({
+    queryKey: ['crm', appId, 'timeline', { contact_id: contactId }, 'campaigns'],
+    queryFn: () => crmApi(appId).timeline({ contact_id: contactId }, { limit: 200, kinds: 'email,sms,call' }),
+  })
+  if (q.isLoading) return <p className="p-5 text-sm text-muted-foreground">Loading…</p>
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />
+  if (!q.data?.length)
+    return (
+      <EmptyState
+        icon={Send}
+        title="No campaigns sent to this contact"
+        description="Email, SMS and voice deliveries, opens, clicks, replies and call outcomes appear here once campaigns run."
+      />
+    )
+  return (
+    <ol className="relative space-y-4 border-l pl-6" data-testid="campaign-history">
+      {q.data.map((it) => {
+        const meta = KIND_META[it.kind] ?? KIND_META.system!
+        const Icon = meta.icon
+        const campaign = it.meta.campaign as string | undefined
+        return (
+          <li key={`${it.kind}:${it.id}`} className="relative">
+            <span className={cn('absolute -left-[37px] top-0 flex size-6 items-center justify-center rounded-full ring-4 ring-card', meta.tone)}>
+              <Icon className="size-3.5" />
+            </span>
+            <p className="text-sm font-medium">{it.title}</p>
+            {it.body && <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-muted-foreground">{it.body}</p>}
+            <p className="text-xs text-muted-foreground" title={formatDateTime(it.occurred_at)}>
+              {timeAgo(it.occurred_at)}
+              {campaign && ` · ${campaign}`}
+            </p>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
 
 function ConsentDialog({ contact, channel, onClose }: { contact: ContactDetail; channel: Channel | null; onClose: () => void }) {
   const { app } = useWorkspace()
@@ -122,17 +160,24 @@ export function ContactProfilePage() {
   const api = audienceApi(appId)
   const q = useContact(appId, contactId!)
   const attrs = useAttributes(appId)
-  const tags = useTags(appId)
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [edit, setEdit] = useState(false)
   const [consentFor, setConsentFor] = useState<Channel | null>(null)
   const [del, setDel] = useState(false)
   const [busy, setBusy] = useState(false)
-  const activity = useQuery({ queryKey: [...aqk.contact(appId, contactId!), 'activity'], queryFn: () => api.activity(contactId!) })
+  const [tagOpen, setTagOpen] = useState(false)
+  const [listOpen, setListOpen] = useState(false)
+  const showCrm = can('crm.read')
+  // With CRM access the activity lives in one merged timeline on the "CRM & activity" tab.
+  const activity = useQuery({ queryKey: [...aqk.contact(appId, contactId!), 'activity'], queryFn: () => api.activity(contactId!), enabled: !showCrm })
   const consents = useQuery({ queryKey: [...aqk.contact(appId, contactId!), 'consents'], queryFn: () => api.consents(contactId!) })
   const write = can('audience.write')
   const base = `/apps/${appId}/audience`
+  const [params, setParams] = useSearchParams()
+  const rawTab = params.get('tab') ?? 'overview'
+  // One activity view: "activity" and "crm" are the same tab for CRM users.
+  const tab = showCrm ? (rawTab === 'activity' ? 'crm' : rawTab) : rawTab === 'crm' ? 'activity' : rawTab
 
   if (q.isLoading) return <FullPageSpinner />
   if (q.isError)
@@ -144,6 +189,7 @@ export function ContactProfilePage() {
   const c = q.data!
   const refresh = () => qc.invalidateQueries({ queryKey: aqk.all(appId) })
   const name = c.full_name || c.email || c.phone_display || 'Unnamed contact'
+  const reach = reachFromEligibility(c.eligibility)
 
   return (
     <>
@@ -177,17 +223,34 @@ export function ContactProfilePage() {
         }
       />
 
-      <Tabs defaultValue="overview">
+      <QuickActions
+        appId={appId}
+        className="-mt-3 mb-5"
+        contact={{ id: c.id, name, email: c.email, phone: c.phone, ...(reach ?? {}) }}
+        company={c.company_id && c.company ? { id: c.company_id, name: c.company } : null}
+        crm={showCrm && can('crm.write')}
+        write={write}
+      />
+
+      <Tabs
+        value={tab}
+        onValueChange={(v) => {
+          const next = new URLSearchParams(params)
+          if (v === 'overview') next.delete('tab')
+          else next.set('tab', v)
+          setParams(next, { replace: true })
+        }}
+      >
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="activity">Activity</TabsTrigger>
+          {showCrm ? <TabsTrigger value="crm">CRM &amp; activity</TabsTrigger> : <TabsTrigger value="activity">Activity</TabsTrigger>}
           <TabsTrigger value="campaigns">Campaign history</TabsTrigger>
           <TabsTrigger value="attributes">Attributes</TabsTrigger>
           <TabsTrigger value="consent">Consent history</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card>
               <CardHeader className="flex-row items-center gap-3">
                 <Avatar name={name} className="size-11 text-sm" />
@@ -269,29 +332,10 @@ export function ContactProfilePage() {
                 <div>
                   <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Tags
-                    {write && !!tags.data?.length && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button className="rounded p-0.5 hover:bg-muted" aria-label="Add tag">
-                            <Plus className="size-3.5" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent>
-                          {tags.data
-                            .filter((t) => !c.tags.some((x) => x.id === t.id))
-                            .map((t) => (
-                              <DropdownMenuItem
-                                key={t.id}
-                                onSelect={async () => {
-                                  await api.tagContact(c.id, t.id).catch((e) => toast.error(errorMessage(e)))
-                                  refresh()
-                                }}
-                              >
-                                {t.name}
-                              </DropdownMenuItem>
-                            ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                    {write && (
+                      <button className="rounded p-0.5 hover:bg-muted" aria-label="Add tag" onClick={() => setTagOpen(true)}>
+                        <Plus className="size-3.5" />
+                      </button>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
@@ -314,7 +358,14 @@ export function ContactProfilePage() {
                   </div>
                 </div>
                 <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Lists</div>
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Lists
+                    {write && (
+                      <button className="rounded p-0.5 hover:bg-muted" aria-label="Add to list" onClick={() => setListOpen(true)}>
+                        <Plus className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {c.lists.length === 0 && <span className="text-sm text-muted-foreground">Not in any list</span>}
                     {c.lists.map((l) => (
@@ -326,9 +377,21 @@ export function ContactProfilePage() {
                 </div>
               </CardContent>
             </Card>
+            <WorkflowsCard appId={appId} contactIds={[c.id]} className="lg:col-span-3" />
           </div>
         </TabsContent>
 
+        {showCrm && (
+          <TabsContent value="crm">
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm" data-testid="crm-reach">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reachable by</span>
+              <ReachChips reach={reach?.reach} reasons={reach?.reasons} />
+            </div>
+            <ContactCrmPanel contactId={c.id} contactName={name} />
+          </TabsContent>
+        )}
+
+        {!showCrm && (
         <TabsContent value="activity">
           <Card>
             <CardContent className="pt-5">
@@ -353,14 +416,21 @@ export function ContactProfilePage() {
             </CardContent>
           </Card>
         </TabsContent>
+        )}
 
         <TabsContent value="campaigns">
           <Card>
-            <EmptyState
-              icon={Send}
-              title="No campaigns sent to this contact"
-              description="Email, SMS and voice deliveries, opens, clicks and call outcomes will appear here once campaigns run."
-            />
+            <CardContent className="pt-5">
+              {showCrm ? (
+                <CampaignHistory appId={appId} contactId={c.id} />
+              ) : (
+                <EmptyState
+                  icon={Send}
+                  title="Campaign history needs CRM access"
+                  description="Ask an admin for CRM access to see the emails, SMS and calls sent to this contact."
+                />
+              )}
+            </CardContent>
           </Card>
         </TabsContent>
 
@@ -433,6 +503,8 @@ export function ContactProfilePage() {
       </Tabs>
 
       <ContactFormDialog open={edit} onOpenChange={setEdit} contact={c} />
+      <AddTagDialog appId={appId} open={tagOpen} onOpenChange={setTagOpen} contactIds={[c.id]} who={name} />
+      <AddToListDialog appId={appId} open={listOpen} onOpenChange={setListOpen} contactIds={[c.id]} who={name} />
       <ConsentDialog contact={c} channel={consentFor} onClose={() => setConsentFor(null)} />
       <ConfirmDialog
         open={del}

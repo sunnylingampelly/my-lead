@@ -72,10 +72,40 @@ class TemplateOut(ORMModel):
     updated_at: datetime
 
 
+MAX_AUDIENCE_CONTACT_IDS = 1000
+
+
+def without_design(model_cls, obj, **extra):
+    """Build an output model from an ORM row without letting pydantic walk `design`.
+
+    Visual-editor designs are deeply nested trees; pydantic-core refuses to serialize beyond ~100 levels
+    ("Maximum serialization depth exceeded"), which turned saving a complex email into a 500. The raw
+    design is attached afterwards and written by dump_with_design() with the standard JSON encoder."""
+    data = {k: getattr(obj, k) for k in model_cls.model_fields if k != "design" and hasattr(obj, k)}
+    out = model_cls.model_validate({**data, **extra, "design": None})
+    out.__dict__["design"] = getattr(obj, "design", None)
+    return out
+
+
+def dump_with_design(out) -> dict:
+    body = out.model_dump(mode="json", exclude={"design"})
+    body["design"] = out.__dict__.get("design")
+    return body
+
+
 class Audience(BaseModel):
     all: bool = False
     list_ids: list[str] = Field(default_factory=list, max_length=50)
     segment_ids: list[str] = Field(default_factory=list, max_length=50)
+    # Explicit people, e.g. "resend to non-openers" or a selection made on a report or the contacts page.
+    contact_ids: list[str] = Field(default_factory=list, max_length=MAX_AUDIENCE_CONTACT_IDS)
+
+    @field_validator("contact_ids")
+    @classmethod
+    def _ids(cls, v: list[str]) -> list[str]:
+        if any(not 0 < len(x) <= 36 for x in v):
+            raise ValueError("Contact ids must be 1 to 36 characters")
+        return list(dict.fromkeys(v))
 
 
 class CampaignCreate(BaseModel):
@@ -83,6 +113,7 @@ class CampaignCreate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     campaign_type: Literal["newsletter", "promotional", "announcement", "regular"] = "regular"
     template_id: str | None = Field(default=None, max_length=36)
+    audience: Audience | None = None
 
 
 class CampaignUpdate(BaseModel):
@@ -200,10 +231,21 @@ class TestSendRequest(BaseModel):
 
 
 class ReadinessCheck(BaseModel):
+    """One item of a campaign's pre-send checklist (shared by email, SMS and voice).
+
+    Checks are self-describing so the UI can offer a fix without knowing every key: `step` names the
+    editor step that fixes it, `action_url`/`action_label` point to the page outside the editor that
+    does, `pending` marks a requirement shown before the choice it depends on (e.g. no sender yet),
+    and `meta` carries extra facts (e.g. wallet balance and estimated cost)."""
     key: str
     label: str
     ok: bool
     detail: str | None = None
+    step: str | None = None
+    action_url: str | None = None
+    action_label: str | None = None
+    pending: bool = False
+    meta: dict[str, Any] | None = None
 
 
 class MessageOut(ORMModel):

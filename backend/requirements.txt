@@ -19,3 +19,5 @@ tzdata==2026.6
 boto3==1.44.4
 phonenumbers==9.0.43
 mutagen==1.47.0
+anthropic==2.10.0
+pypdf==7.1.1  # chatbot knowledge: text from uploaded PDFs

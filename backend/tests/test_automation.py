@@ -10,6 +10,7 @@ from app.models import ApplicationSettings
 from app.models.automation import WorkflowRun
 from app.models.email import EmailMessage
 from app.models.sms import SmsMessage
+from app.models.voice import VoiceCall
 from app.services.automation import engine
 from app.services.automation.graph import Graph, structural_issues
 from app.services.email import tokens
@@ -208,6 +209,29 @@ def test_sms_step_uses_sms_engine(auto):
     assert a.get(f"{a.base}/sms/campaigns").json()["total"] == 0
 
 
+def test_voice_step_picks_a_signalcraft_number(auto):
+    """A voice step has no caller to choose: the call comes from a pool number picked at dial time."""
+    a = auto
+    a.put(f"{a.base}/sms/registration", json={"principal_entity_id": "1101456789012345678", "attest": True})
+    audio = a.post(f"{a.base}/voice/audio/tts", json={"name": "Order", "tts_text": "Your order has shipped.",
+                                                       "tts_language": "en-IN"}).json()
+    g = {"nodes": [node("t", "trigger", kind="contact_created"),
+                   node("v", "voice_call", audio_id=audio["id"], category="transactional")],
+         "edges": [edge("t", "v")]}
+    a.post(f"{a.base}/contacts", json={"first_name": "Kiran", "phone": "+919876511111",
+                                       "consent": {"voice": True, "source": "Store"}})
+    w = a.post(f"{a.a}/workflows", json={"name": "Shipped call", "graph": g}).json()
+    r = a.post(f"{a.a}/workflows/{w['id']}/publish", json={"activate": True})
+    assert r.status_code == 200, r.text
+    r = a.post(f"{a.base}/contacts", json={"first_name": "Meera", "phone": "+919876598765",
+                                           "consent": {"voice": True, "source": "Store"}})
+    assert engine.tick()["enrolled"] == 1
+    with SessionLocal() as db:
+        call = db.scalar(select(VoiceCall).where(VoiceCall.contact_id == r.json()["id"]))
+    # Transactional calls to India come from a 160-series number.
+    assert call is not None and call.from_number and call.from_number.startswith("+91160"), call
+
+
 def test_permissions_and_isolation(auto):
     a = auto
     w = a.post(f"{a.a}/workflows", json={"name": "Private"}).json()
@@ -219,3 +243,143 @@ def test_permissions_and_isolation(auto):
     org = other.post("/organizations", json={"name": "Other Org"}).json()
     other.post("/applications", json={"organization_id": org["id"], "name": "Theirs"})
     assert other.get(f"{a.a}/workflows/{w['id']}").status_code in (403, 404)
+
+
+# ------------------------------------------------------------------ manual enrollment, history, dry runs
+
+def tag_flow(a) -> dict:
+    return {"nodes": [node("t", "trigger", kind="tag_added", tag_id=a.tag_id),
+                      node("w", "wait", amount=1, unit="hours"),
+                      node("x", "update_contact", action="add_to_list", list_id=a.list_id)],
+            "edges": [edge("t", "w"), edge("w", "x")]}
+
+
+def test_manual_enroll_contacts_list_and_segment(auto):
+    a = auto
+    asha, ravi = a.contacts["Asha"], a.contacts["Ravi"]
+    w = a.post(f"{a.a}/workflows", json={"name": "Manual", "graph": tag_flow(a)}).json()
+    url = f"{a.a}/workflows/{w['id']}/enroll"
+    r = a.post(url, json={"contact_ids": [asha]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "WORKFLOW_NOT_ACTIVE"
+    assert a.post(f"{a.a}/workflows/{w['id']}/publish", json={"activate": True}).status_code == 200
+    assert a.post(url, json={"contact_ids": [asha]}).json()["enrolled"] == 1
+    # Already on the journey: skipped, never duplicated.
+    r = a.post(url, json={"contact_ids": [asha, asha]}).json()
+    assert r["enrolled"] == 0 and r["skipped"] == 1
+    add_to_list(a, "Asha", "Ravi")
+    r = a.post(url, json={"list_id": a.list_id}).json()
+    assert (r["enrolled"], r["skipped"]) == (1, 1)
+    assert a.post(url, json={}).status_code == 422
+    viewer = invite_and_join(a, "v2@example.com", "viewer", [a.app_id])
+    assert viewer.post(url, json={"contact_ids": [asha]}).status_code == 403
+
+    runs = a.get(f"{a.a}/workflows/{w['id']}/runs", params={"search": "ravi"}).json()
+    assert runs["total"] == 1 and runs["items"][0]["contact_id"] == ravi
+    for _ in range(2):
+        wake_all(w["id"])
+        engine.tick()
+    # Finished, re-entry off: not enrolled again.
+    r = a.post(url, json={"contact_ids": [asha]}).json()
+    assert (r["enrolled"], r["skipped"]) == (0, 1) and "re-entry is off" in r["message"]
+    a.patch(f"{a.a}/workflows/{w['id']}", json={"allow_reentry": True})
+    seg = a.post(f"{a.base}/segments", json={"name": "Pune", "rules": {
+        "match": "all", "conditions": [{"field": "city", "operator": "is", "value": "Pune"}]}}).json()
+    assert a.post(url, json={"segment_id": seg["id"]}).json()["enrolled"] == 1
+
+    # C2: the contact's workflow history, newest first.
+    hist = a.get(f"{a.a}/runs", params={"contact_id": asha}).json()
+    assert len(hist) == 2 and hist[0]["status"] == "waiting" and hist[1]["status"] == "completed"
+    assert set(hist[0]) == {"run_id", "workflow_id", "workflow_name", "status", "current_step", "started_at",
+                            "finished_at", "exit_reason"}
+    assert hist[0]["workflow_name"] == "Manual" and hist[0]["current_step"] == "Wait"
+    assert viewer.get(f"{a.a}/runs", params={"contact_id": asha}).status_code == 200
+    steps = a.get(f"{a.a}/workflows/{w['id']}/runs/{hist[1]['run_id']}").json()["steps"]
+    assert steps[-1]["label"] == "Update contact" and steps[-1]["summary"] == "Add to list: Newsletter"
+
+
+def test_dry_run_walks_graph_without_sending(auto):
+    a = auto
+    g = {"nodes": [node("t", "trigger", kind="contact_created"),
+                   node("e", "send_email", sender_id=a.sender_id, template_id=a.template_id),
+                   node("w", "wait", amount=2, unit="days"),
+                   node("c", "condition", kind="rules", rules={"match": "all", "conditions": [
+                       {"field": "city", "operator": "is", "value": "Pune"}]}),
+                   node("tag", "update_contact", action="add_tag", tag_id=a.tag_id),
+                   node("end", "end")],
+         "edges": [edge("t", "e"), edge("e", "w"), edge("w", "c"), edge("c", "tag", "yes"), edge("c", "end", "no")]}
+    w = a.post(f"{a.a}/workflows", json={"name": "Dry", "graph": g}).json()
+    r = a.post(f"{a.a}/workflows/{w['id']}/test", json={"contact_id": a.contacts["Asha"]})
+    assert r.status_code == 200, r.text
+    steps = r.json()["steps"]
+    assert [s["node_id"] for s in steps] == ["t", "e", "w", "c", "tag"]
+    assert steps[1]["outcome"] == "would_send" and "Welcome" in steps[1]["detail"]
+    assert steps[2]["detail"] == "Would wait 2 days"
+    assert steps[3]["outcome"] == "branch_yes" and "matches" in steps[3]["detail"]
+    assert steps[4]["outcome"] == "would_do" and "Engaged" in steps[4]["detail"]
+    ravi = a.post(f"{a.a}/workflows/{w['id']}/test", json={"contact_id": a.contacts["Ravi"]}).json()["steps"]
+    assert ravi[3]["outcome"] == "branch_no" and ravi[-1]["outcome"] == "end"
+    with SessionLocal() as db:
+        assert db.scalar(select(WorkflowRun.id).where(WorkflowRun.workflow_id == w["id"])) is None
+        assert db.scalar(select(EmailMessage.id)) is None
+    assert a.get(f"{a.base}/contacts/{a.contacts['Asha']}").json()["tags"] == []
+    assert a.post(f"{a.a}/workflows/{w['id']}/test", json={"contact_id": "nope"}).status_code == 404
+
+
+def test_engagement_triggers(auto):
+    from app.models import EmailEvent, SmsInbound
+
+    a = auto
+    asha, ravi = a.contacts["Asha"], a.contacts["Ravi"]
+
+    def flow(name, **trig):
+        g = {"nodes": [node("t", "trigger", **trig), node("x", "update_contact", action="add_tag", tag_id=a.tag_id)],
+             "edges": [edge("t", "x")]}
+        w = a.post(f"{a.a}/workflows", json={"name": name, "graph": g}).json()
+        r = a.post(f"{a.a}/workflows/{w['id']}/publish", json={"activate": True})
+        assert r.status_code == 200, r.text
+        return w["id"]
+
+    bad = a.post(f"{a.a}/workflows", json={"name": "bad", "graph": {
+        "nodes": [node("t", "trigger", kind="sms_replied", keyword="STOP"), node("e", "end")],
+        "edges": [edge("t", "e")]}}).json()
+    assert "handled automatically" in a.get(f"{a.a}/workflows/{bad['id']}/validate").json()["issues"][0]["message"]
+
+    sms = flow("Reply", kind="sms_replied", keyword="yes")
+    unsub = flow("Unsub", kind="unsubscribed", channel="email")
+    flow("Calls", kind="call_answered")
+    # An email journey produces a real message; then a click on it.
+    send = a.post(f"{a.a}/workflows", json={"name": "Send", "graph": journey(a)}).json()
+    a.post(f"{a.a}/workflows/{send['id']}/publish", json={"activate": True})
+    click = flow("Click", kind="email_clicked")
+    add_to_list(a, "Ravi")
+    engine.tick()
+    with SessionLocal() as db:
+        m = db.scalar(select(EmailMessage).where(EmailMessage.contact_id == ravi))
+        db.add(EmailEvent(organization_id=m.organization_id, application_id=m.application_id, campaign_id=m.campaign_id,
+                          message_id=m.id, contact_id=ravi, type="clicked", url="https://chai.example", meta={}))
+        for body, kw in (("Yes please", None), ("no thanks", None), ("STOP", "stop")):
+            db.add(SmsInbound(organization_id=m.organization_id, application_id=m.application_id,
+                              from_phone="+919876543210", body=body, keyword=kw, contacts_updated=0))
+        db.commit()
+    r = a.post(f"{a.base}/contacts/{ravi}/consent", json={"channel": "email", "status": "revoked", "source": "Asked"})
+    assert r.status_code in (200, 201), r.text
+    engine.tick()
+    with SessionLocal() as db:
+        by = {wid: [r.contact_id for r in db.scalars(select(WorkflowRun).where(WorkflowRun.workflow_id == wid))]
+              for wid in (sms, unsub, click)}
+    assert by == {sms: [asha], unsub: [ravi], click: [ravi]}
+
+
+def test_analytics_links_automation_steps(auto):
+    a = auto
+    w = a.post(f"{a.a}/workflows", json={"name": "Welcome series", "graph": journey(a)}).json()
+    a.post(f"{a.a}/workflows/{w['id']}/publish", json={"activate": True})
+    add_to_list(a, "Asha")
+    engine.tick()
+    d = a.get(f"{a.base}/analytics").json()
+    row = d["top_campaigns"][0]
+    assert row["automation"] and row["workflow_id"] == w["id"] and row["node_id"] == "e"
+    assert d["setup"] == {"sender_verified": True, "campaign_sent": True, "workflow_created": True}
+    assert d["totals"]["email_sent"] == 1 and d["previous"]["totals"]["email_sent"] == 0
+    assert d["changes"]["email_sent"] is None
+    assert a.get(f"{a.base}/analytics", params={"rank": "rate"}).json()["top_campaigns"][0]["id"] == row["id"]

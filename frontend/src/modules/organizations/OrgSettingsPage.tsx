@@ -60,7 +60,7 @@ export function OrgSettingsPage() {
   return (
     <>
       <PageHeader breadcrumbs={[{ label: org.name }, { label: 'Organization' }]} title="Organization settings" />
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <form onSubmit={submit} className="lg:col-span-2" noValidate>
           <Card>
             <CardHeader>

@@ -9,6 +9,7 @@ from app.schemas.email import Audience
 
 Category = Literal["promotional", "transactional", "service"]
 Language = Literal["en-IN", "hi-IN", "ta-IN", "te-IN", "en-US", "es-US"]
+MessageType = Literal["audio", "tts", "ai_agent"]
 
 
 class CallerIn(BaseModel):
@@ -36,6 +37,7 @@ class CallerOut(ORMModel):
     is_default: bool
     attested_at: datetime | None
     created_at: datetime
+    phone_number_id: str | None = None
 
 
 class TtsIn(BaseModel):
@@ -72,14 +74,17 @@ class CampaignCreate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     category: Category = "promotional"
     audio_id: str | None = Field(default=None, max_length=36)
+    agent_id: str | None = Field(default=None, max_length=36)
+    audience: Audience | None = None
 
 
 class CampaignUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=500)
     category: Category | None = None
-    caller_ref: str | None = Field(default=None, max_length=36)
     audio_id: str | None = Field(default=None, max_length=36)
+    message_type: MessageType | None = None
+    agent_id: str | None = Field(default=None, max_length=36)
     intro_text: str | None = Field(default=None, max_length=300)
     opt_out_keypress: bool | None = None
     max_attempts: int | None = Field(default=None, ge=1, le=3)
@@ -114,6 +119,8 @@ class CampaignOut(ORMModel):
     status: str
     caller_ref: str | None
     audio_id: str | None
+    message_type: str | None = None
+    agent_id: str | None = None
     intro_text: str | None
     opt_out_keypress: bool
     max_attempts: int
@@ -153,6 +160,7 @@ class CallOut(ORMModel):
     id: str
     contact_id: str | None
     to_phone: str
+    from_number: str | None = None
     status: str
     attempts: int
     answered_by: str | None
@@ -168,6 +176,14 @@ class CallOut(ORMModel):
     next_attempt_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    agent_id: str | None = None
+    ai_summary: str | None = None
+    ai_sentiment: str | None = None
+    ai_interest: str | None = None
+    ai_next_step: str | None = None
+    ai_processed_at: datetime | None = None
+    contact_name: str | None = None
+    has_transcript: bool = False
 
 
 class TestCall(BaseModel):

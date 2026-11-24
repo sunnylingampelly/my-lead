@@ -3,8 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useQuery } from '@tanstack/react-query'
 import {
+  BadgeCheck,
   Building2,
+  CheckSquare,
   CornerDownLeft,
+  CreditCard,
+  Handshake,
+  Mail,
+  MessageSquare,
+  PhoneCall,
+  Workflow,
   Filter,
   Keyboard,
   LayoutGrid,
@@ -21,6 +29,10 @@ import {
   UserRound,
 } from 'lucide-react'
 import { audienceApi } from '@/api/audience'
+import { crmApi } from '@/api/crm'
+import { emailApi } from '@/api/email'
+import { smsApi } from '@/api/sms'
+import { voiceApi } from '@/api/voice'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { useWorkspace } from '@/hooks/useWorkspace'
@@ -39,6 +51,8 @@ interface Entry {
 }
 
 const RECENT_KEY = 'sc-palette-recent'
+/** Groups filled from server-side search; they always match the query that produced them. */
+const SEARCH_GROUPS = new Set(['Contacts', 'Campaigns', 'Segments', 'Deals', 'Companies'])
 
 function readRecent(): string[] {
   try {
@@ -74,16 +88,72 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     staleTime: 10_000,
   })
 
+  const searching = open && !!app && debounced.length >= 2
+  const campaigns = useQuery({
+    queryKey: ['palette-campaigns', app?.id, debounced],
+    queryFn: async () => {
+      const p = { search: debounced, page: 1, page_size: 4 }
+      const [e, s, v] = await Promise.all([
+        emailApi(app!.id).campaigns(p).catch(() => null),
+        smsApi(app!.id).campaigns(p).catch(() => null),
+        voiceApi(app!.id).campaigns(p).catch(() => null),
+      ])
+      return [
+        ...(e?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'email' as const })),
+        ...(s?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'sms' as const })),
+        ...(v?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'voice' as const })),
+      ]
+    },
+    enabled: searching && can('campaigns.read'),
+    staleTime: 10_000,
+  })
+  // Segments have no server-side search; the list is small and cached.
+  const segments = useQuery({
+    queryKey: ['palette-segments', app?.id],
+    queryFn: () => audienceApi(app!.id).segments(),
+    enabled: searching && can('audience.read'),
+    staleTime: 60_000,
+  })
+  const crmOk = searching && can('crm.read')
+  const deals = useQuery({
+    queryKey: ['palette-deals', app?.id, debounced],
+    queryFn: () => crmApi(app!.id).deals({ search: debounced, page: 1, page_size: 4 }),
+    enabled: crmOk,
+    staleTime: 10_000,
+  })
+  const companies = useQuery({
+    queryKey: ['palette-companies', app?.id, debounced],
+    queryFn: () => crmApi(app!.id).companies({ search: debounced, page: 1, page_size: 4 }),
+    enabled: crmOk,
+    staleTime: 10_000,
+  })
+  const fetching = contacts.isFetching || campaigns.isFetching || deals.isFetching || companies.isFetching
+
   const go = (to: string) => () => navigate(to)
 
   const entries = useMemo<Entry[]>(() => {
     const list: Entry[] = []
     const base = app ? `/apps/${app.id}` : null
-    if (base && can('audience.write')) {
-      list.push({ id: 'a-contact', group: 'Actions', label: 'Add a contact', icon: UserPlus, run: go(`${base}/audience/contacts?new=1`), keywords: 'create new person' })
-      list.push({ id: 'a-import', group: 'Actions', label: 'Import contacts from CSV or Excel', icon: Upload, run: go(`${base}/audience/import`), keywords: 'upload file xlsx' })
-      list.push({ id: 'a-segment', group: 'Actions', label: 'Create a segment', icon: Filter, run: go(`${base}/audience/segments/new`), keywords: 'filter audience' })
+    if (base && can('campaigns.write')) {
+      list.push({ id: 'a-email', group: 'Create', label: 'New email campaign', icon: Mail, run: go(`${base}/email/campaigns/new`), keywords: 'create send newsletter' })
+      list.push({ id: 'a-sms', group: 'Create', label: 'New SMS campaign', icon: MessageSquare, run: go(`${base}/sms/campaigns/new`), keywords: 'create text message' })
+      list.push({ id: 'a-voice', group: 'Create', label: 'New voice campaign', icon: PhoneCall, run: go(`${base}/voice/campaigns/new`), keywords: 'create call broadcast ivr' })
     }
+    if (base && can('automation.write'))
+      list.push({ id: 'a-workflow', group: 'Create', label: 'New workflow', icon: Workflow, run: go(`${base}/automation/new`), keywords: 'automation journey create' })
+    if (base && can('crm.write')) {
+      list.push({ id: 'a-deal', group: 'Create', label: 'New deal', icon: Handshake, run: go(`${base}/crm/deals?new=1`), keywords: 'crm opportunity create' })
+      list.push({ id: 'a-task', group: 'Create', label: 'New task', icon: CheckSquare, run: go(`${base}/crm/tasks?new=1`), keywords: 'crm todo follow up create' })
+    }
+    if (base && can('audience.write')) {
+      list.push({ id: 'a-contact', group: 'Create', label: 'Add contact', icon: UserPlus, run: go(`${base}/audience/contacts?new=1`), keywords: 'create new person' })
+      list.push({ id: 'a-import', group: 'Create', label: 'Import contacts', hint: 'CSV or Excel', icon: Upload, run: go(`${base}/audience/import`), keywords: 'upload file xlsx' })
+      list.push({ id: 'a-segment', group: 'Create', label: 'Create a segment', icon: Filter, run: go(`${base}/audience/segments/new`), keywords: 'filter audience' })
+    }
+    if (base && can('settings.write'))
+      list.push({ id: 'a-sender', group: 'Actions', label: 'Verify a sender', hint: 'Email', icon: BadgeCheck, run: go(`${base}/email/senders`), keywords: 'email from address domain' })
+    if (org && canOrg('billing.manage'))
+      list.push({ id: 'a-credit', group: 'Actions', label: 'Add credit', icon: CreditCard, run: go(`/orgs/${org.id}/billing?topup=1`), keywords: 'wallet top up balance money pay' })
     if (org && canOrg('members.invite'))
       list.push({ id: 'a-invite', group: 'Actions', label: 'Invite a teammate', icon: UserPlus, run: go(`/orgs/${org.id}/team?invite=1`), keywords: 'member user' })
     if (org && canOrg('apps.create'))
@@ -91,10 +161,20 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     list.push({ id: 'a-theme', group: 'Actions', label: resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', icon: resolved === 'dark' ? Sun : Moon, run: toggle, keywords: 'theme appearance', shortcut: 'Shift D' })
     list.push({ id: 'a-keys', group: 'Actions', label: 'Keyboard shortcuts', icon: Keyboard, run: onShortcuts, shortcut: '?' })
 
+    // A parent can share its route with a child (CRM opens on Deals): list each route once.
+    const seen = new Set<string>()
     for (const item of [...appNav(app), ...orgNav(org)]) {
-      if (item.to) list.push({ id: `n-${item.to}`, group: 'Go to', label: item.label, icon: item.icon, run: go(item.to), shortcut: item.shortcut })
-      for (const c of item.children ?? [])
-        list.push({ id: `n-${c.to}`, group: 'Go to', label: c.label, hint: item.label, icon: item.icon, run: go(c.to), shortcut: c.shortcut })
+      const sharedChild = item.children?.find((c) => c.to === item.to)
+      if (item.to && !sharedChild && !seen.has(item.to)) {
+        seen.add(item.to)
+        list.push({ id: `n-${item.to}`, group: 'Go to', label: item.label, icon: item.icon, run: go(item.to), shortcut: item.shortcut })
+      }
+      for (const c of item.children ?? []) {
+        if (seen.has(c.to)) continue
+        seen.add(c.to)
+        const shortcut = c.shortcut ?? (c === sharedChild ? item.shortcut : undefined)
+        list.push({ id: `n-${c.to}`, group: 'Go to', label: c.label, hint: item.label, icon: item.icon, run: go(c.to), shortcut })
+      }
     }
     list.push({ id: 'n-account', group: 'Go to', label: 'Account and security', icon: User, run: go('/account'), keywords: 'profile password sessions' })
 
@@ -108,6 +188,25 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
         run: go(`/apps/${app!.id}/audience/contacts/${c.id}`),
         keywords: debounced,
       })
+    const CHANNEL = { email: { label: 'Email', icon: Mail }, sms: { label: 'SMS', icon: MessageSquare }, voice: { label: 'Voice', icon: PhoneCall } }
+    for (const c of campaigns.data ?? [])
+      list.push({
+        id: `s-${c.channel}-${c.id}`,
+        group: 'Campaigns',
+        label: c.name,
+        hint: `${CHANNEL[c.channel].label} · ${c.status}`,
+        icon: CHANNEL[c.channel].icon,
+        run: go(`/apps/${app!.id}/${c.channel}/campaigns/${c.id}${c.status === 'draft' ? '/edit' : ''}`),
+        keywords: debounced,
+      })
+    const needle = debounced.toLowerCase()
+    if (needle.length >= 2)
+      for (const s of (segments.data ?? []).filter((x) => x.name.toLowerCase().includes(needle)).slice(0, 4))
+        list.push({ id: `s-seg-${s.id}`, group: 'Segments', label: s.name, icon: Filter, run: go(`/apps/${app!.id}/audience/segments/${s.id}`), keywords: debounced })
+    for (const d of deals.data?.items ?? [])
+      list.push({ id: `s-deal-${d.id}`, group: 'Deals', label: d.title, icon: Handshake, run: go(`/apps/${app!.id}/crm/deals/${d.id}`), keywords: debounced })
+    for (const co of companies.data?.items ?? [])
+      list.push({ id: `s-co-${co.id}`, group: 'Companies', label: co.name, icon: Building2, run: go(`/apps/${app!.id}/crm/companies/${co.id}`), keywords: debounced })
     for (const a of apps)
       if (a.id !== app?.id) list.push({ id: `app-${a.id}`, group: 'Switch application', label: a.name, hint: a.timezone, icon: LayoutGrid, run: go(`/apps/${a.id}`) })
     for (const o of orgs)
@@ -124,7 +223,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     })
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app, org, apps, orgs, resolved, contacts.data, debounced])
+  }, [app, org, apps, orgs, resolved, contacts.data, campaigns.data, segments.data, deals.data, companies.data, debounced])
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -133,12 +232,12 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
       const recentEntries = recent.map((id) => entries.find((e) => e.id === id)).filter(Boolean) as Entry[]
       return [
         ...recentEntries.map((e) => ({ ...e, group: 'Recent' })),
-        ...entries.filter((e) => e.group !== 'Contacts' && !recent.includes(e.id)),
+        ...entries.filter((e) => !SEARCH_GROUPS.has(e.group) && !recent.includes(e.id)),
       ]
     }
     const words = q.split(/\s+/)
     return entries.filter((e) => {
-      if (e.group === 'Contacts') return true
+      if (SEARCH_GROUPS.has(e.group)) return true
       const hay = `${e.label} ${e.hint ?? ''} ${e.group} ${e.keywords ?? ''}`.toLowerCase()
       return words.every((w) => hay.includes(w))
     })
@@ -155,7 +254,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     if (!e) return
     try {
       const recent = [e.id, ...readRecent().filter((x) => x !== e.id)].slice(0, 4)
-      if (!e.id.startsWith('c-')) localStorage.setItem(RECENT_KEY, JSON.stringify(recent))
+      if (!e.id.startsWith('c-') && !e.id.startsWith('s-')) localStorage.setItem(RECENT_KEY, JSON.stringify(recent))
     } catch {
       /* ignore */
     }
@@ -174,7 +273,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
         >
           <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
           <div className="flex items-center gap-3 border-b px-4">
-            {contacts.isFetching ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <Search className="size-4 text-muted-foreground" />}
+            {fetching ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <Search className="size-4 text-muted-foreground" />}
             <input
               autoFocus
               value={query}
@@ -191,7 +290,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
                   run(visible[active])
                 }
               }}
-              placeholder={app ? 'Search contacts, pages and actions…' : 'Search pages and actions…'}
+              placeholder={app ? 'Search contacts, campaigns, deals, pages and actions…' : 'Search pages and actions…'}
               className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
               aria-label="Command"
             />
@@ -200,7 +299,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
           <ul ref={listRef} className="max-h-[min(60vh,440px)] overflow-y-auto p-2" role="listbox">
             {visible.length === 0 && (
               <li className="px-3 py-10 text-center text-sm text-muted-foreground">
-                {contacts.isFetching ? 'Searching…' : `No results for “${query}”`}
+                {fetching ? 'Searching…' : `No results for “${query}”`}
               </li>
             )}
             {visible.map((e, i) => {
@@ -236,7 +335,7 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
             <span>
               <kbd className="font-mono">↵</kbd> open
             </span>
-            {app && <span className="ml-auto">Type 2+ letters to search contacts in {app.name}</span>}
+            {app && <span className="ml-auto hidden truncate sm:inline">Type 2+ letters to search records in {app.name}</span>}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

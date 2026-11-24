@@ -18,10 +18,13 @@ from app.services.audience import import_files
 from app.services.audience.collections import create_list, get_or_create_tags
 from app.services.audience.contacts import attr_defs, identity_rule
 from app.services.audience.normalize import CORE_TEXT_FIELDS, check_identity, identity_keys, normalize_contact
+from app.services.billing import plans
 from app.services.tenancy import AppContext
 from app.utils.contact_normalize import InvalidValue
 
-CORE_TARGETS = set(CORE_TEXT_FIELDS) | {"full_name", "email", "phone", "country", "timezone", "tags"}
+# owner_email and lifecycle_stage are CRM fields applied by the import processor, not by normalize_contact.
+CRM_TARGETS = {"owner_email", "lifecycle_stage"}
+CORE_TARGETS = set(CORE_TEXT_FIELDS) | {"full_name", "email", "phone", "country", "timezone", "tags"} | CRM_TARGETS
 ACTIVE = ("queued", "processing")
 
 
@@ -187,6 +190,9 @@ def start(db: Session, ctx: AppContext, import_id: str, mapping: dict[str, str],
     if imp.status != "uploaded":
         raise Conflict("This import has already started", code="IMPORT_STARTED")
     mapping = check_mapping(db, ctx, imp, mapping)
+    # The plan's contact limit: refuse when it is already reached. Rows beyond the remaining room are
+    # reported as "skipped" by the processor, so a partial import stops cleanly at the limit.
+    plans.check_limit(db, ctx.organization_id, "contacts", plans.count_usage(db, ctx.organization_id, "contacts"))
     c = options.consent
     channels = [ch for ch in ("email", "sms", "voice") if getattr(c, ch)]
     if channels:

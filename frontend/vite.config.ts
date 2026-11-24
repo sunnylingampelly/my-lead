@@ -15,6 +15,8 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target, changeOrigin: false },
         '/docs': { target },
+        // Embeds (lead forms, chat widget) are served by the backend.
+        '/embed': { target },
       },
     },
   }

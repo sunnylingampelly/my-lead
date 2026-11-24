@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Ban, Filter, ListChecks, ListMinus, Pencil, Plus, SlidersHorizontal, Tag as TagIcon, Trash2, Users } from 'lucide-react'
+import { Ban, Filter, ListChecks, ListMinus, Megaphone, Pencil, Plus, SlidersHorizontal, Tag as TagIcon, Trash2, Users } from 'lucide-react'
 import { audienceApi, aqk, useAttributes, useLists, useSegments, useTags } from '@/api/audience'
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, FullPageSpinner, LoadingRows, PageHeader } from '@/components/page'
@@ -11,6 +11,14 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, Input, Select, Textarea } from '@/components/ui/form-controls'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/misc'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Pagination, TAG_COLORS, TagChip } from '@/components/audience'
@@ -18,7 +26,52 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn, formatDate, timeAgo } from '@/lib/utils'
 import type { Attribute, Channel, ContactListInfo } from '@/types/audience'
+import { campaignUrl, EnrollDialog, workflowUrl } from '../crm/connect'
 import { ContactsTable } from './ContactsTable'
+
+/** "Use this segment / list" menu: start a campaign on any channel, a new workflow, or enroll everyone now. */
+function UseAudienceMenu({ audience, name, compact }: { audience: { segment_id?: string; list_id?: string }; name: string; compact?: boolean }) {
+  const { app, can } = useWorkspace()
+  const appId = app!.id
+  const [enroll, setEnroll] = useState(false)
+  const kind = audience.segment_id ? 'segment' : 'list'
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          {compact ? (
+            <Button variant="ghost" size="icon" aria-label={`Use ${name} in a campaign or workflow`}>
+              <Megaphone />
+            </Button>
+          ) : (
+            <Button variant="outline">
+              <Megaphone /> Use this {kind}
+            </Button>
+          )}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel>Send a campaign</DropdownMenuLabel>
+          <DropdownMenuItem asChild>
+            <Link to={campaignUrl(appId, 'email', audience)}>Send email campaign</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to={campaignUrl(appId, 'sms', audience)}>Send SMS campaign</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to={campaignUrl(appId, 'voice', audience)}>Send voice campaign</Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Automation</DropdownMenuLabel>
+          <DropdownMenuItem asChild>
+            <Link to={workflowUrl(appId, audience)}>{kind === 'segment' ? 'Start a workflow when someone joins' : 'Start a workflow when someone is added'}</Link>
+          </DropdownMenuItem>
+          {can('audience.write') && <DropdownMenuItem onSelect={() => setEnroll(true)}>Enroll everyone in a workflow…</DropdownMenuItem>}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <EnrollDialog appId={appId} open={enroll} onOpenChange={setEnroll} audience={audience} who={`everyone in “${name}”`} />
+    </>
+  )
+}
 
 function useCrumbs(label: string, parent?: { label: string; to: string }) {
   const { app, org } = useWorkspace()
@@ -95,7 +148,7 @@ export function SegmentsPage() {
                 <TH>Contacts</TH>
                 <TH>Conditions</TH>
                 <TH>Updated</TH>
-                <TH className="w-28" />
+                <TH className="w-36" />
               </TR>
             </THead>
             <TBody>
@@ -115,8 +168,10 @@ export function SegmentsPage() {
                   </TD>
                   <TD className="text-muted-foreground">{timeAgo(s.updated_at)}</TD>
                   <TD>
+                    <div className="flex justify-end gap-1">
+                      <UseAudienceMenu audience={{ segment_id: s.id }} name={s.name} compact />
                     {can('audience.write') && (
-                      <div className="flex justify-end gap-1">
+                      <>
                         <Button variant="ghost" size="icon" asChild aria-label={`Edit ${s.name}`}>
                           <Link to={`${base}/segments/${s.id}`}>
                             <Pencil />
@@ -139,8 +194,9 @@ export function SegmentsPage() {
                         >
                           <Trash2 />
                         </Button>
-                      </div>
+                      </>
                     )}
+                    </div>
                   </TD>
                 </TR>
               ))}
@@ -169,13 +225,16 @@ export function SegmentContactsPage() {
         title={seg.data!.name}
         description={`${formatCount(seg.data!.last_count ?? 0, app!.default_country)} contacts currently match this segment.`}
         actions={
-          can('audience.write') && (
-            <Button variant="outline" asChild>
-              <Link to={`${base}/segments/${segmentId}`}>
-                <SlidersHorizontal /> Edit rules
-              </Link>
-            </Button>
-          )
+          <>
+            <UseAudienceMenu audience={{ segment_id: segmentId }} name={seg.data!.name} />
+            {can('audience.write') && (
+              <Button variant="outline" asChild>
+                <Link to={`${base}/segments/${segmentId}`}>
+                  <SlidersHorizontal /> Edit rules
+                </Link>
+              </Button>
+            )}
+          </>
         }
       />
       <ContactsTable scope={{ segment_id: segmentId }} />
@@ -282,7 +341,7 @@ export function ListsPage() {
                 <TH>Name</TH>
                 <TH>Contacts</TH>
                 <TH>Created</TH>
-                <TH className="w-28" />
+                <TH className="w-36" />
               </TR>
             </THead>
             <TBody>
@@ -297,8 +356,10 @@ export function ListsPage() {
                   <TD className="tabular-nums">{formatCount(l.contact_count, app!.default_country)}</TD>
                   <TD className="text-muted-foreground">{formatDate(l.created_at)}</TD>
                   <TD>
+                    <div className="flex justify-end gap-1">
+                      <UseAudienceMenu audience={{ list_id: l.id }} name={l.name} compact />
                     {can('audience.write') && (
-                      <div className="flex justify-end gap-1">
+                      <>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -327,8 +388,9 @@ export function ListsPage() {
                         >
                           <Trash2 />
                         </Button>
-                      </div>
+                      </>
                     )}
+                    </div>
                   </TD>
                 </TR>
               ))}
@@ -358,6 +420,7 @@ export function ListDetailPage() {
         breadcrumbs={crumbs}
         title={q.data!.name}
         description={q.data!.description ?? `${formatCount(q.data!.contact_count, app!.default_country)} contacts`}
+        actions={<UseAudienceMenu audience={{ list_id: listId }} name={q.data!.name} />}
       />
       <ContactsTable
         scope={{ list_id: listId }}

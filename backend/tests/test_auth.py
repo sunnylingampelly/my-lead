@@ -77,6 +77,26 @@ def test_refresh_rotates_and_detects_reuse():
     assert a.post("/auth/refresh").status_code == 401
 
 
+def test_rotation_by_another_tab_asks_to_refresh_not_sign_out():
+    """Two tabs share the refresh cookie. When one rotates it, the other tab's access token reports
+    TOKEN_EXPIRED (the client refreshes with the shared cookie) instead of SESSION_REVOKED (sign-out)."""
+    a = Api().register("tabs@example.com")
+    tab_b_token = a.token
+    a.token = a.post("/auth/refresh").json()["access_token"]  # tab A rotates the shared cookie
+    tab_a_token = a.token
+    a.token = tab_b_token
+    assert a.get("/users/me").json()["error"]["code"] == "TOKEN_EXPIRED"
+    r = a.post("/auth/refresh")  # tab B refreshes with the shared, current cookie
+    assert r.status_code == 200
+    a.token = r.json()["access_token"]
+    assert a.get("/users/me").status_code == 200
+    # After logout, an older rotated token still can't get back in: the refresh it triggers fails.
+    assert a.post("/auth/logout").status_code == 200
+    a.token = tab_a_token
+    assert a.get("/users/me").status_code == 401
+    assert a.post("/auth/refresh").status_code == 401
+
+
 def test_logout_revokes_access_and_refresh():
     a = Api().register("out@example.com")
     assert a.post("/auth/logout").status_code == 200

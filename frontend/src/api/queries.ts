@@ -14,6 +14,8 @@ export const qk = {
   appSettings: (id: string) => ['apps', id, 'settings'] as const,
   appMembers: (id: string) => ['apps', id, 'members'] as const,
   dashboard: (id: string) => ['apps', id, 'dashboard'] as const,
+  checklist: (id: string) => ['apps', id, 'dashboard', 'checklist'] as const,
+  providers: (id: string) => ['apps', id, 'providers'] as const,
   sessions: ['me', 'sessions'] as const,
   mailbox: (to?: string) => ['dev', 'mailbox', to ?? ''] as const,
 }
@@ -60,6 +62,13 @@ export const useAppSettings = (id: string) =>
 export const useAppMembers = (id: string) => useQuery({ queryKey: qk.appMembers(id), queryFn: () => appApi.members(id) })
 
 export const useDashboard = (id: string) => useQuery({ queryKey: qk.dashboard(id), queryFn: () => appApi.dashboard(id), staleTime: 0, refetchOnMount: 'always' })
+
+/** Getting-started steps only (used by the sidebar's setup progress). */
+export const useChecklist = (id: string | undefined, enabled = true) =>
+  useQuery({ queryKey: qk.checklist(id ?? ''), queryFn: () => appApi.checklist(id!), enabled: !!id && enabled, staleTime: 30_000 })
+
+export const useProvidersStatus = (id: string | undefined, enabled = true) =>
+  useQuery({ queryKey: qk.providers(id ?? ''), queryFn: () => appApi.providersStatus(id!), enabled: !!id && enabled, staleTime: 5 * 60_000 })
 
 export const useSessions = () => useQuery({ queryKey: qk.sessions, queryFn: userApi.sessions })
 

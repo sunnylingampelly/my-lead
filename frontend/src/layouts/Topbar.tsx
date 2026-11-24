@@ -1,5 +1,8 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { BookOpen, Check, ChevronsUpDown, Keyboard, LogOut, Menu, Monitor, Moon, Plus, Search, ShieldCheck, Sun, User as UserIcon } from 'lucide-react'
+import { BookOpen, Check, ChevronsUpDown, Keyboard, LogOut, Menu, Monitor, Moon, Plus, Search, ShieldCheck, Sun, TriangleAlert, User as UserIcon, Wallet as WalletIcon } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { billingApi, bqk } from '@/api/billing'
+import { CountryFlag } from '@/components/CountryFlag'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -20,20 +23,27 @@ import { useAuth, useUser } from '@/hooks/useAuth'
 import { useTheme, type ThemePreference } from '@/hooks/useTheme'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { APP_COLORS, cn } from '@/lib/utils'
-import { countryFlag } from '@/lib/regions'
+import { formatMoney } from '@/modules/sms/format'
 import { NotificationsBell } from './NotificationsBell'
 
-function Switcher({ label, value, children, testId, swatch }: { label: string; value: string; children: React.ReactNode; testId: string; swatch?: React.ReactNode }) {
+function Switcher({ label, mobileLabel, value, children, testId, swatch, className }: { label: string; mobileLabel?: string; value: string; children: React.ReactNode; testId: string; swatch?: React.ReactNode; className?: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           data-testid={testId}
-          className="flex h-10 max-w-[240px] items-center gap-2 rounded-lg px-2.5 text-left text-sm transition-colors hover:bg-muted data-[state=open]:bg-muted"
+          className={cn('flex h-10 min-w-0 max-w-[240px] items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors hover:bg-muted data-[state=open]:bg-muted sm:px-2.5', className)}
         >
           {swatch}
           <div className="min-w-0">
-            <div className="text-[10px] font-medium uppercase leading-none tracking-wide text-muted-foreground">{label}</div>
+            {mobileLabel ? (
+              <>
+                <div className="truncate text-[10px] font-medium leading-none tracking-wide text-muted-foreground sm:hidden">{mobileLabel}</div>
+                <div className="hidden text-[10px] font-medium uppercase leading-none tracking-wide text-muted-foreground sm:block">{label}</div>
+              </>
+            ) : (
+              <div className="truncate text-[10px] font-medium uppercase leading-none tracking-wide text-muted-foreground">{label}</div>
+            )}
             <div className="truncate font-medium leading-tight">{value}</div>
           </div>
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -52,10 +62,19 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
   const { logout } = useAuth()
   const { preference, setPreference, resolved, toggle } = useTheme()
   const { orgs, org, apps, app, canOrg } = useWorkspace()
+  // Low-balance chip: the wallet is organization-wide.
+  const wallet = useQuery({
+    queryKey: org ? bqk.summary({ kind: 'org', id: org.id }) : ['billing', 'none'],
+    queryFn: () => billingApi.summary({ kind: 'org', id: org!.id }),
+    enabled: !!org && canOrg('billing.read'),
+    // Kept fresh so the header balance follows spending and top-ups.
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-1 border-b bg-card/80 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-card/70 sm:px-5">
-      <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenu} aria-label="Open navigation">
+    <header className="sticky top-0 z-30 flex h-14 min-w-0 items-center gap-1 border-b bg-card/80 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-card/70 sm:px-5">
+      <Button variant="ghost" size="icon" className="shrink-0 lg:hidden" onClick={onMenu} aria-label="Open navigation">
         <Menu />
       </Button>
 
@@ -64,7 +83,8 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
           label="Organization"
           value={org.name}
           testId="org-switcher"
-          swatch={<span className="hidden size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xs sm:flex">{countryFlag(org.country)}</span>}
+          className={app ? 'hidden sm:flex' : undefined}
+          swatch={<span className="hidden size-7 shrink-0 items-center justify-center rounded-md bg-muted sm:flex"><CountryFlag code={org.country} /></span>}
         >
           <DropdownMenuLabel>Organizations</DropdownMenuLabel>
           {orgs.map((o) => (
@@ -84,17 +104,24 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
       {org && (
         <Switcher
           label="Application"
+          mobileLabel={org.name}
+          className={app ? undefined : 'hidden sm:flex'}
           value={app?.name ?? 'No application'}
           testId="app-switcher"
           swatch={app && <span className={cn('hidden size-2.5 shrink-0 rounded-full sm:block', APP_COLORS[app.color] ?? 'bg-indigo-500')} />}
         >
           <DropdownMenuLabel>Applications in {org.name}</DropdownMenuLabel>
+          {orgs.length > 1 && (
+            <DropdownMenuItem className="sm:hidden" onSelect={() => navigate(`/orgs/${org.id}/applications`)}>
+              Switch organization…
+            </DropdownMenuItem>
+          )}
           {apps.length === 0 && <div className="px-2 py-2 text-sm text-muted-foreground">No applications yet</div>}
           {apps.map((a) => (
             <DropdownMenuItem key={a.id} onSelect={() => navigate(`/apps/${a.id}`)}>
               <span className={cn('size-2 rounded-full', APP_COLORS[a.color] ?? 'bg-indigo-500')} />
               <span className="flex-1 truncate">{a.name}</span>
-              {a.default_country && <span className="text-xs">{countryFlag(a.default_country)}</span>}
+              {a.default_country && <CountryFlag code={a.default_country} />}
               {a.id === app?.id && <Check />}
             </DropdownMenuItem>
           ))}
@@ -104,12 +131,56 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
               <DropdownMenuItem onSelect={() => navigate(`/onboarding/application?org=${org.id}`)}>
                 <Plus /> New application
               </DropdownMenuItem>
+              <p className="px-2 pb-1.5 text-xs text-muted-foreground">One brand or product with its own contacts, campaigns and settings.</p>
             </>
           )}
         </Switcher>
       )}
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {org && wallet.data?.plan && (
+          <Link
+            to={`/orgs/${org.id}/billing#plan`}
+            className={cn(
+              'hidden h-7 items-center rounded-full border px-2 text-xs font-medium sm:flex',
+              wallet.data.plan.status === 'past_due'
+                ? 'border-warning-border bg-warning-soft text-warning-strong'
+                : wallet.data.plan.key === 'pro'
+                  ? 'border-primary/30 bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted',
+            )}
+            data-testid="plan-badge"
+          >
+            {wallet.data.plan.name}
+            {wallet.data.plan.status === 'past_due' && ' · past due'}
+          </Link>
+        )}
+        {wallet.data && org && (
+          // Always-visible wallet balance (what campaigns can spend now). Red when below the alert level.
+          <Tooltip
+            content={
+              wallet.data.low
+                ? `Low balance: below your alert level of ${formatMoney(wallet.data.low_balance_threshold, wallet.data.currency)}`
+                : wallet.data.held
+                  ? `${formatMoney(wallet.data.held, wallet.data.currency)} held for running campaigns · Balance ${formatMoney(wallet.data.balance, wallet.data.currency)}`
+                  : 'Wallet balance available to spend'
+            }
+          >
+            <Link
+              to={`/orgs/${org.id}/billing${wallet.data.low && wallet.data.can_manage ? '?topup=1' : ''}`}
+              className={cn(
+                'flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-xs font-medium tabular-nums transition',
+                wallet.data.low ? 'border-danger-border bg-danger-soft text-danger-strong' : 'bg-background/60 text-foreground hover:bg-muted',
+              )}
+              aria-label={`Wallet: ${formatMoney(wallet.data.available, wallet.data.currency)} available${wallet.data.low ? ', low balance' : ''}`}
+              data-testid="wallet-chip"
+              data-low={wallet.data.low ? 'true' : undefined}
+            >
+              {wallet.data.low ? <TriangleAlert className="size-3.5" /> : <WalletIcon className="size-3.5 text-muted-foreground" />}
+              <span>{formatMoney(wallet.data.available, wallet.data.currency)}</span>
+            </Link>
+          </Tooltip>
+        )}
         <button
           onClick={onSearch}
           className="group hidden h-9 w-72 items-center gap-2 rounded-lg border bg-background/60 px-3 text-sm text-muted-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-background md:flex"
@@ -122,7 +193,7 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
           <Search />
         </Button>
         <Tooltip content={resolved === 'dark' ? 'Light mode' : 'Dark mode'} shortcut="Shift D">
-          <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme" data-testid="theme-toggle">
+          <Button variant="ghost" size="icon" className="hidden sm:inline-flex" onClick={toggle} aria-label="Toggle theme" data-testid="theme-toggle">
             {resolved === 'dark' ? <Sun /> : <Moon />}
           </Button>
         </Tooltip>
@@ -130,7 +201,7 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
         <DropdownMenu>
           <Tooltip content="Help">
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Help">
+              <Button variant="ghost" size="icon" className="hidden sm:inline-flex" aria-label="Help">
                 <BookOpen />
               </Button>
             </DropdownMenuTrigger>
@@ -177,6 +248,14 @@ export function Topbar({ onMenu, onSearch, onShortcuts }: { onMenu: () => void; 
                 </Link>
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem className="sm:hidden" onSelect={onShortcuts}>
+              <Keyboard /> Keyboard shortcuts
+            </DropdownMenuItem>
+            <DropdownMenuItem className="sm:hidden" asChild>
+              <a href="/docs" target="_blank" rel="noreferrer">
+                <BookOpen /> API reference
+              </a>
+            </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 {resolved === 'dark' ? <Moon /> : <Sun />} Appearance

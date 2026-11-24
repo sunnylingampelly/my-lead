@@ -2,7 +2,7 @@
 import jwt
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 
 from app.core import crypto, security
 from app.core.config import settings
@@ -13,19 +13,32 @@ from app.models import Base, RolePermission
 from tests.conftest import Api
 
 
-def test_migrations_match_models(tmp_path):
+def test_migrations_match_models():
+    """Migrate a scratch MySQL database to head, compare it with the models, then downgrade."""
     from alembic import command
+    from sqlalchemy.engine import make_url
 
     from tests.conftest import alembic_config
 
-    url = f"sqlite:///{(tmp_path / 'm.db').as_posix()}"
-    command.upgrade(alembic_config(url), "head")
-    eng = create_engine(url)
-    with eng.connect() as conn:
-        diff = compare_metadata(MigrationContext.configure(conn, opts={"compare_type": True}), Base.metadata)
-    eng.dispose()
-    assert diff == [], diff
-    command.downgrade(alembic_config(url), "base")
+    base = make_url(settings.DATABASE_URL)
+    scratch = base.set(database=f"{base.database}_migrations")
+    url = scratch.render_as_string(hide_password=False)
+    admin = create_engine(base)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch.database}`"))
+        conn.execute(text(f"CREATE DATABASE `{scratch.database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+    try:
+        command.upgrade(alembic_config(url), "head")
+        eng = create_engine(url)
+        with eng.connect() as conn:
+            diff = compare_metadata(MigrationContext.configure(conn, opts={"compare_type": True}), Base.metadata)
+        eng.dispose()
+        assert diff == [], diff
+        command.downgrade(alembic_config(url), "base")
+    finally:
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch.database}`"))
+        admin.dispose()
 
 
 def test_rbac_seeded_matches_code():

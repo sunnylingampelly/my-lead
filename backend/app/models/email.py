@@ -5,7 +5,7 @@ from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, String, Text, 
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.audience import TenantMixin
-from app.models.base import Base, TimestampMixin, UTCDateTime, uuid_pk
+from app.models.base import Base, JSONText, TimestampMixin, UTCDateTime, uuid_pk
 from app.utils.time import utcnow
 
 
@@ -36,7 +36,7 @@ class EmailTemplate(TenantMixin, TimestampMixin, Base):
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     preheader: Mapped[str | None] = mapped_column(String(255), nullable=True)
     editor: Mapped[str] = mapped_column(String(10), nullable=False, default="visual")  # visual|html|text
-    design: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # visual editor project data
+    design: Mapped[dict | None] = mapped_column(JSONText, nullable=True)  # visual editor project data
     html: Mapped[str | None] = mapped_column(Text, nullable=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -62,7 +62,7 @@ class EmailCampaign(TenantMixin, TimestampMixin, Base):
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     preheader: Mapped[str | None] = mapped_column(String(255), nullable=True)
     editor: Mapped[str] = mapped_column(String(10), nullable=False, default="visual")
-    design: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    design: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     html: Mapped[str | None] = mapped_column(Text, nullable=True)
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # {"all": bool, "list_ids": [...], "segment_ids": [...]}

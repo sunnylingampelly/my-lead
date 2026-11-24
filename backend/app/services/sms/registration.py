@@ -23,7 +23,7 @@ def dlt_row(db: Session, application_id: str) -> SmsDltConfiguration | None:
 def dlt_out(db: Session, row: SmsDltConfiguration | None) -> DltConfigOut:
     if row is None:
         return DltConfigOut(principal_entity_id=None, entity_name=None, dlt_platform=None, us_brand_id=None,
-                            us_campaign_id=None, us_messaging_service_sid=None, attested_at=None)
+                            us_campaign_id=None, attested_at=None)
     out = DltConfigOut.model_validate(row)
     if row.attested_by_id:
         u = db.get(User, row.attested_by_id)
@@ -42,8 +42,7 @@ def update_dlt(db: Session, ctx: AppContext, data: DltConfigIn) -> DltConfigOut:
     if row is None:
         row = SmsDltConfiguration(organization_id=ctx.organization_id, application_id=ctx.application_id)
         db.add(row)
-    fields = ("principal_entity_id", "entity_name", "dlt_platform", "us_brand_id", "us_campaign_id",
-              "us_messaging_service_sid")
+    fields = ("principal_entity_id", "entity_name", "dlt_platform", "us_brand_id", "us_campaign_id")
     changed = False
     for f in fields:
         v = getattr(data, f)
@@ -88,8 +87,6 @@ def create_sender(db: Session, ctx: AppContext, data: SenderIn) -> SmsSender:
     err = rules.validate_sender(data.country, data.kind, data.sender_id)
     if err:
         raise ValidationFailed(err, code="INVALID_SENDER_ID", details=[{"field": "sender_id", "message": err}])
-    if data.provider == "msg91" and data.country != "IN":
-        raise ValidationFailed("MSG91 is used for Indian sender IDs", code="PROVIDER_COUNTRY_MISMATCH")
     if db.scalar(select(SmsSender.id).where(SmsSender.application_id == ctx.application_id,
                                             SmsSender.sender_id == data.sender_id)):
         raise Conflict(f"{data.sender_id} is already added", code="SENDER_EXISTS")

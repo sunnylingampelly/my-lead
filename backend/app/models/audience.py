@@ -46,6 +46,10 @@ class Contact(TenantMixin, TimestampMixin, Base):
         Index("ix_contacts_app_last_activity", "application_id", "last_activity_at"),
         Index("ix_contacts_email_hash", "application_id", "email_hash"),
         Index("ix_contacts_phone_hash", "application_id", "phone_hash"),
+        Index("ix_contacts_app_owner", "application_id", "owner_id"),
+        Index("ix_contacts_app_lead_score", "application_id", "lead_score"),
+        Index("ix_contacts_company", "company_id"),
+        Index("ix_contacts_app_sla_due", "application_id", "sla_due_at"),
     )
 
     id: Mapped[str] = uuid_pk()
@@ -78,6 +82,16 @@ class Contact(TenantMixin, TimestampMixin, Base):
     last_activity_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_via_import_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # CRM
+    company_id: Mapped[str | None] = mapped_column(ForeignKey("crm_companies.id", ondelete="SET NULL"), nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    lifecycle_stage: Mapped[str] = mapped_column(String(20), nullable=False, default="lead")
+    fit_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    engagement_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lead_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sla_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    first_response_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    sla_breached_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
     tags: Mapped[list["Tag"]] = relationship(secondary="contact_tags", lazy="selectin", viewonly=True)
 

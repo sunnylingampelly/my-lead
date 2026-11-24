@@ -226,7 +226,7 @@ def effective_settings() -> dict:
         "providers": {
             "email": {"brevo": has(s.BREVO_API_KEY), "ses": has(s.AWS_ACCESS_KEY_ID, s.AWS_SECRET_ACCESS_KEY),
                       "brevo_webhook": has(s.BREVO_WEBHOOK_TOKEN)},
-            "sms": {"msg91": has(s.MSG91_AUTH_KEY), "twilio": has(s.TWILIO_ACCOUNT_SID, s.TWILIO_AUTH_TOKEN)},
+            "sms": {"sns": has(s.AWS_ACCESS_KEY_ID, s.AWS_SECRET_ACCESS_KEY)},
             "voice": {"telnyx": has(s.TELNYX_API_KEY, s.TELNYX_ACCOUNT_SID, s.TELNYX_TEXML_APP_ID),
                       "telnyx_signatures": has(s.TELNYX_PUBLIC_KEY),
                       "exotel": has(s.EXOTEL_SID, s.EXOTEL_API_KEY, s.EXOTEL_API_TOKEN, s.EXOTEL_APP_ID),

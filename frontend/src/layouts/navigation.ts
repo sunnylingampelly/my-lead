@@ -1,12 +1,15 @@
 import {
   BarChart3,
   Building2,
+  ClipboardList,
   CreditCard,
+  Handshake,
   LayoutDashboard,
   LayoutGrid,
   type LucideIcon,
   Mail,
   MessageSquare,
+  MessagesSquare,
   PhoneCall,
   ScrollText,
   Settings,
@@ -56,6 +59,23 @@ export function appNav(app: Application | null): NavItem[] {
         { label: 'Suppression', to: `${base}/audience/suppression` },
       ],
     },
+    ...(can('forms.read') ? [{ label: 'Lead forms', icon: ClipboardList, to: `${base}/forms`, shortcut: 'G F' }] : []),
+    ...(can('chat.read')
+      ? [
+          {
+            label: 'Chat',
+            icon: MessagesSquare,
+            to: `${base}/chat`,
+            end: true,
+            shortcut: 'G H',
+            children: [
+              { label: 'Inbox', to: `${base}/chat/inbox` },
+              { label: 'Chatbots', to: `${base}/chat/bots` },
+              { label: 'Analytics', to: `${base}/chat`, end: true },
+            ],
+          },
+        ]
+      : []),
     {
       label: 'Email',
       icon: Mail,
@@ -89,13 +109,30 @@ export function appNav(app: Application | null): NavItem[] {
       shortcut: 'G V',
       children: [
         { label: 'Calls', to: `${base}/voice/campaigns` },
+        { label: 'AI agents', to: `${base}/voice/agents` },
         { label: 'Audio library', to: `${base}/voice/audio` },
-        ...(can('settings.read') ? [{ label: 'Caller IDs', to: `${base}/voice/callers` }] : []),
       ],
     },
+    ...(can('crm.read')
+      ? [
+          {
+            label: 'CRM',
+            icon: Handshake,
+            to: `${base}/crm/deals`,
+            shortcut: 'G R',
+            children: [
+              { label: 'Deals', to: `${base}/crm/deals` },
+              { label: 'Leads', to: `${base}/crm/leads` },
+              { label: 'Companies', to: `${base}/crm/companies` },
+              { label: 'Tasks', to: `${base}/crm/tasks` },
+              { label: 'Reports', to: `${base}/crm/reports` },
+              { label: 'CRM settings', to: `${base}/crm/settings` },
+            ],
+          },
+        ]
+      : []),
     { label: 'Automation', icon: Workflow, to: `${base}/automation`, shortcut: 'G W' },
     ...(can('analytics.read') ? [{ label: 'Analytics', icon: BarChart3, to: `${base}/analytics`, shortcut: 'G Y' }] : []),
-    ...(can('billing.read') ? [{ label: 'Billing & usage', icon: CreditCard, to: `${base}/billing` }] : []),
     ...(can('settings.read') ? [{ label: 'Settings', icon: Settings, to: `${base}/settings`, shortcut: 'G E' }] : []),
   ]
 }

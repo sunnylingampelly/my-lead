@@ -70,7 +70,7 @@ export function ScriptPreview({ steps, language, seconds, label }: { steps: Scri
             </span>
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {s.kind === 'play' ? 'Recording' : s.kind === 'keypress' ? 'Opt-out prompt · waits 5 seconds for a key' : i === 0 && steps.length > 1 ? 'Introduction' : 'Message'}
+                {s.kind === 'play' ? 'Recording' : s.kind === 'keypress' ? 'Opt-out prompt · waits 5 seconds for a key' : s.kind === 'agent' ? 'AI conversation' : i === 0 && steps[1]?.kind === 'agent' ? 'Greeting' : i === 0 && steps.length > 1 ? 'Introduction' : 'Message'}
               </div>
               {s.kind === 'play' ? <audio controls src={s.url ?? undefined} className="mt-1 h-8 w-full max-w-xs" /> : <p className="mt-0.5">{s.text}</p>}
             </div>

@@ -1,5 +1,8 @@
 """Twilio Programmable Voice adapter. The call script is sent inline as TwiML; callbacks are
-validated with the same X-Twilio-Signature scheme as SMS (see providers.sms.twilio)."""
+validated with the X-Twilio-Signature scheme (twilio_signature / verify_twilio below)."""
+import base64
+import hashlib
+import hmac
 from xml.sax.saxutils import escape, quoteattr
 
 import httpx
@@ -22,7 +25,26 @@ def _say(text: str, language: str | None, voice: str | None) -> str:
     return f"<Say{attrs}>{escape(text)}</Say>"
 
 
+# Amazon Polly neural voices for ConversationRelay (ttsProvider="Amazon").
+RELAY_VOICES = {k: v.removeprefix("Polly.") for k, v in VOICES.items()}
+
+
+def relay_twiml(script: CallScript) -> str:
+    """<Connect><ConversationRelay>: Twilio speaks, transcribes and talks to our WebSocket."""
+    r = script.relay
+    voice = RELAY_VOICES.get((r.language, r.voice or "female"))
+    attrs = [f"url={quoteattr(r.url)}", f"welcomeGreeting={quoteattr(r.greeting)}", f"language={quoteattr(r.language)}"]
+    if voice:
+        attrs += ['ttsProvider="Amazon"', f"voice={quoteattr(voice)}"]
+    attrs += ['dtmfDetection="true"', 'interruptible="any"', 'welcomeGreetingInterruptible="any"']
+    action = f" action={quoteattr(r.action_url)}" if r.action_url else ""
+    return (f'<?xml version="1.0" encoding="UTF-8"?><Response><Connect{action}>'
+            f'<ConversationRelay {" ".join(attrs)}/></Connect></Response>')
+
+
 def twiml(script: CallScript) -> str:
+    if script.relay is not None:
+        return relay_twiml(script)
     parts = []
     for s in script.steps:
         parts.append(_say(s.text or "", s.language, s.voice) if s.kind == "say" else f"<Play>{escape(s.url or '')}</Play>")
@@ -61,3 +83,12 @@ class TwilioVoiceProvider(VoiceProvider):
             return CallResult(accepted=False, provider=self.name, error_code=str(body.get("code") or r.status_code),
                               error_message=str(body.get("message") or "Rejected")[:500])
         return CallResult(accepted=True, provider=self.name, provider_call_id=body.get("sid"))
+
+
+def twilio_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
+    payload = url + "".join(f"{k}{params[k]}" for k in sorted(params))
+    return base64.b64encode(hmac.new(auth_token.encode(), payload.encode(), hashlib.sha1).digest()).decode()
+
+
+def verify_twilio(auth_token: str, url: str, params: dict[str, str], signature: str) -> bool:
+    return bool(signature) and hmac.compare_digest(twilio_signature(auth_token, url, params), signature)

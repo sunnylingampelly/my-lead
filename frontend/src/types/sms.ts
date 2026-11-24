@@ -1,4 +1,4 @@
-import type { CampaignAudience, CampaignStatus, Estimate } from './email'
+import type { CampaignAudience, CampaignStatus, Estimate, ReadinessCheck, WalletInfo } from './email'
 
 export type SmsCategory = 'promotional' | 'transactional' | 'service'
 export type SmsCountry = 'IN' | 'US'
@@ -10,7 +10,6 @@ export interface DltConfig {
   dlt_platform: string | null
   us_brand_id: string | null
   us_campaign_id: string | null
-  us_messaging_service_sid: string | null
   attested_at: string | null
   attested_by_name: string | null
 }
@@ -20,7 +19,7 @@ export interface SmsSender {
   sender_id: string
   country: SmsCountry
   kind: SenderKind
-  provider: 'simulation' | 'msg91' | 'twilio'
+  provider: 'simulation' | 'sns'
   dlt_header_id: string | null
   status: 'pending' | 'active'
   is_default: boolean
@@ -98,11 +97,32 @@ export interface MessageShape {
 
 export interface SmsReadiness {
   ready: boolean
-  checks: { key: string; label: string; ok: boolean; detail: string | null }[]
+  checks: ReadinessCheck[]
   estimate: Estimate | null
   message: MessageShape
   cost: { unit_price: number; currency: string; total: number }
+  country: 'IN' | 'US' | null
+  sender_chosen: boolean
+  wallet: WalletInfo
+  quiet_hours: QuietWait
   custom_keys: string[]
+}
+
+export interface SendWindow {
+  start: string | null
+  end: string | null
+  reason: string
+  legal: [string, string] | null
+  quiet: [string, string]
+}
+
+/** How many recipients would wait if sent now, and until when. */
+export interface QuietWait {
+  applies?: boolean
+  window: SendWindow
+  waiting: number
+  next_window_at: string | null
+  timezone: string | null
 }
 
 export interface SmsMessage {
@@ -141,6 +161,7 @@ export interface SmsOverview {
   upcoming: SmsCampaignListItem[]
   senders: Record<string, number>
   registration: { india: boolean; us: boolean }
+  setup: { consented: { IN: number; US: number }; dlt_templates: number; default_country: 'IN' | 'US' | null }
 }
 
 export interface SmsInboundItem {
@@ -151,4 +172,6 @@ export interface SmsInboundItem {
   keyword: 'stop' | 'start' | 'help' | null
   contacts_updated: number
   received_at: string
+  contact: { id: string; name: string; email: string | null; owner_id: string | null } | null
+  campaign: { id: string; name: string } | null
 }

@@ -5,7 +5,10 @@
 * Launching a campaign places a hold for its estimated cost; it fails if the available balance
   (balance minus open holds) cannot cover it. Holds are released when the campaign ends.
 * Usage is charged from the channel records themselves (accepted emails, SMS cost, call minutes) by
-  settle_usage(), which charges only the difference since the last settlement.
+  settle_usage(), which charges only the difference since the last settlement. The plan's usage
+  multiplier (Pro: 20% off) is applied to each campaign's cumulative total, so the difference stays correct.
+* Ledger types: trial_credit | test_credit | credit | usage | adjustment | refund | subscription
+  (plan fees) | recurring (monthly fees such as phone-number rental; see subscriptions.py).
 * Amounts in another currency are converted with the platform's configured rate, recorded on the entry.
 """
 from datetime import timedelta
@@ -138,7 +141,7 @@ def place_hold(db: Session, organization_id: str, application_id: str, reference
                                                   WalletHold.reference_id == reference_id))
     if existing is not None:
         return existing
-    need = convert(amount, currency, w.currency)
+    need = dec(convert(amount, currency, w.currency) * _multiplier(db, organization_id))
     if available(db, w) < need:
         raise ValidationFailed(
             f"Not enough credit: this needs about {w.currency} {need:,.2f} and {w.currency} "
@@ -165,7 +168,7 @@ def can_spend(db: Session, organization_id: str) -> bool:
 def coverage(db: Session, organization_id: str, amount, currency: str | None) -> dict:
     """For readiness checks: does the available balance cover an estimate?"""
     w = get_wallet(db, organization_id)
-    need = convert(amount, currency, w.currency)
+    need = dec(convert(amount, currency, w.currency) * _multiplier(db, organization_id))
     avail = available(db, w)
     return {"ok": avail >= need, "need": float(need), "available": float(avail), "currency": w.currency}
 
@@ -207,9 +210,19 @@ def _usage_rows(db: Session):
             yield channel, c, dec(total), c.currency, c.status in final_states, int(n or 0)
 
 
+def _multiplier(db: Session, organization_id: str) -> Decimal:
+    from app.services.billing.plans import usage_multiplier
+
+    return usage_multiplier(db, organization_id)
+
+
 def settle_usage(db: Session) -> int:
-    """Charge each campaign's usage not yet charged. Safe to run any number of times."""
+    """Charge each campaign's usage not yet charged. Safe to run any number of times.
+
+    The amount due is the campaign's cumulative cost × the organization's plan multiplier, and only
+    the part above what was already charged is debited."""
     entries = 0
+    multipliers: dict[str, Decimal] = {}
     for channel, c, total, cur, final, units in list(_usage_rows(db)):
         w = get_wallet(db, c.organization_id)
         s = db.scalar(select(UsageSettlement).where(UsageSettlement.channel == channel,
@@ -218,14 +231,18 @@ def settle_usage(db: Session) -> int:
             s = UsageSettlement(wallet_id=w.id, channel=channel, campaign_id=c.id, charged=0, final=False)
             db.add(s)
             db.flush()
-        due = convert(total, cur or w.currency, w.currency)
+        if c.organization_id not in multipliers:
+            multipliers[c.organization_id] = _multiplier(db, c.organization_id)
+        mult = multipliers[c.organization_id]
+        due = dec(convert(total, cur or w.currency, w.currency) * mult)
         delta = due - dec(s.charged)
         if delta > 0:
             label = {"email": "Email", "sms": "SMS", "voice": "Voice"}[channel]
             tx = post(db, w, "usage", -delta, description=f"{label} usage: {c.name}"[:255],
                       idempotency_key=f"usage:{channel}:{c.id}:{due}", application_id=c.application_id,
                       channel=channel, reference_type=f"{channel}_campaign", reference_id=c.id,
-                      meta={"units": units, "original_amount": float(total), "original_currency": cur})
+                      meta={"units": units, "original_amount": float(total), "original_currency": cur,
+                            **({"plan_discount": float(1 - mult)} if mult != 1 else {})})
             if tx is not None:
                 entries += 1
             s.charged = due

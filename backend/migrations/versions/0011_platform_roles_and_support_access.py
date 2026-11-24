@@ -53,8 +53,6 @@ def downgrade() -> None:
     with op.batch_alter_table('users', schema=None) as batch_op:
         batch_op.drop_column('platform_role')
 
-    with op.batch_alter_table('support_grants', schema=None) as batch_op:
-        batch_op.drop_index('ix_support_grants_user_org')
-
+    # Dropping the table drops its indexes; MySQL refuses to drop an index a foreign key still uses.
     op.drop_table('support_grants')
     # ### end Alembic commands ###

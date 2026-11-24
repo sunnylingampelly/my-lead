@@ -72,4 +72,6 @@ class WorkflowStep(TenantMixin, Base):
     # entered|done|waiting|skipped|failed|branch_yes|branch_no|branch_a|branch_b
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Links to what the step created, e.g. {"task_id": ..., "deal_id": ...}.
+    meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)

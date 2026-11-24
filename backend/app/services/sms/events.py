@@ -22,9 +22,9 @@ from app.utils.time import utcnow
 
 FINAL = ("delivered", "undelivered", "failed")
 RANK = {"queued": 0, "deferred": 0, "sending": 1, "accepted": 2}
-# Twilio: 21610 = recipient replied STOP; 21211/21614/30006 = invalid, not mobile, or landline.
-OPTED_OUT_CODES = {"21610"}
-UNREACHABLE_CODES = {"21211", "21614", "30006"}
+# Error codes from SNS delivery status logs (see sns_receipts): opted out at AWS/carrier, or not a valid mobile.
+OPTED_OUT_CODES = {"OPTED_OUT"}
+UNREACHABLE_CODES = {"INVALID_NUMBER"}
 
 
 def _ctx(db: Session, msg: SmsMessage) -> Ctx:

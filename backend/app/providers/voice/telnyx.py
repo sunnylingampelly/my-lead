@@ -28,6 +28,9 @@ class TelnyxVoiceProvider(VoiceProvider):
         self._key, self._account, self._app, self._timeout = api_key, account_sid, application_sid, timeout
 
     def place(self, call: OutboundCall) -> CallResult:
+        if call.script.relay is not None:
+            return CallResult(accepted=False, provider=self.name, error_code="AI_UNSUPPORTED",
+                              error_message="AI agents need the Twilio provider for live calls")
         body = {"To": call.to, "From": call.caller_id, "ApplicationSid": self._app, "Texml": twiml(call.script),
                 "Timeout": 30}
         if call.machine_detection:

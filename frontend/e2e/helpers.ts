@@ -50,11 +50,11 @@ export async function createOrgAndApp(page: Page, orgName: string, appName: stri
   await expect(page.getByText(`Here's what's happening in ${appName}.`)).toBeVisible()
 }
 
-/** Click a sidebar link; expands the Audience group first when the link lives inside it. */
+/** Click a sidebar link; expands its group (Audience, Email, SMS, Voice, CRM) first when the link lives inside it. */
 export async function navTo(page: Page, name: string) {
   const nav = page.getByRole('navigation', { name: 'Main' })
   const link = nav.getByRole('link', { name, exact: true })
-  for (const group of ['Audience', 'Email', 'SMS', 'Voice']) {
+  for (const group of ['Audience', 'Email', 'SMS', 'Voice', 'CRM']) {
     if (await link.isVisible()) break
     const toggle = nav.getByRole('button', { name: `Show ${group} pages` })
     if (await toggle.isVisible()) await toggle.click()

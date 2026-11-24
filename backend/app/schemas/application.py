@@ -97,8 +97,8 @@ class ApplicationSettingsOut(ORMModel):
 class ApplicationSettingsUpdate(BaseModel):
     contact_identity_rule: Literal["email", "phone", "email_or_phone"] | None = None
     default_email_provider: Literal["simulation", "ses", "brevo"] | None = None
-    default_sms_provider: Literal["simulation", "msg91", "twilio"] | None = None
-    default_voice_provider: Literal["simulation", "exotel", "twilio"] | None = None
+    default_sms_provider: Literal["simulation", "sns"] | None = None
+    default_voice_provider: Literal["simulation", "telnyx", "exotel", "twilio"] | None = None
     quiet_hours_start: str | None = None
     quiet_hours_end: str | None = None
     business_name: str | None = Field(default=None, max_length=200)

@@ -187,6 +187,12 @@ def get_active_session(db: Session, session_id: str) -> UserSession | None:
     return s
 
 
+def was_rotated(db: Session, session_id: str, user_id: str) -> bool:
+    """True when the session ended only because its refresh token was rotated (its family lives on)."""
+    s = db.get(UserSession, session_id)
+    return bool(s and s.user_id == user_id and s.revoked_reason == "rotated" and s.expires_at >= utcnow())
+
+
 # ---------------------------------------------------------------- password reset / change
 
 def request_password_reset(db: Session, *, email: str, ip: str | None) -> None:
