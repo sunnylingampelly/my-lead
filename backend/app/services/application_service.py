@@ -242,7 +242,20 @@ def compliance(db: Session, ctx: AppContext) -> dict:
     checks.append({"key": "10dlc", "label": "A2P 10DLC brand and campaign registration",
                    "required": region.sms_requires_10dlc, "done": sms["done"], "href": sms["href"],
                    "detail": sms["detail"], "steps": sms["steps"]})
+    notices = []
+    from app.core.config import settings as app_settings
+
+    if not app_settings.SMS_ENABLED:  # SMS is "coming soon" everywhere: no SMS registration checks
+        checks = [c for c in checks if c["key"] not in ("dlt", "10dlc")]
+        notices.append({"key": "sms", "level": "info", "text": "SMS is coming soon."})
+    if region.code == "AE":
+        from app.services import uae
+
+        for key, blocked in (("uae_sms", uae.sms_blocked("AE")), ("uae_voice", uae.voice_blocked("AE"))):
+            if blocked:
+                notices.append({"key": key, "level": "info", "text": blocked})
     return {
+        "notices": notices,
         "region": region.code, "region_name": region.name, "currency": region.currency,
         "dial_code": region.dial_code, "marketing_window": [region.marketing_window_start, region.marketing_window_end],
         "sms_voice_requires_written_consent": region.sms_voice_requires_written_consent,

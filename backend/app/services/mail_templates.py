@@ -13,7 +13,7 @@ class RenderedEmail:
 
 
 def _layout(title: str, body_html: str, cta_label: str, cta_url: str, footer: str) -> str:
-    return f"""<!doctype html><html><body style="margin:0;background:#f4f5f7;font-family:Inter,Arial,sans-serif;color:#0f172a">
+    return f"""<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#f4f5f7;font-family:Inter,Arial,sans-serif;color:#0f172a">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 16px">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;border:1px solid #e5e7eb">
 <tr><td style="padding:32px 36px">

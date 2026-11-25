@@ -5,6 +5,27 @@ _TRANSIENT_CODES = {"Throttling", "ThrottlingException", "TooManyRequestsExcepti
                     "InternalFailure", "LimitExceededException"}
 
 
+def _raw_mime(message: OutboundEmail) -> bytes:
+    """A MIME message for sends with attachments (SES Simple content carries none)."""
+    from email.message import EmailMessage
+    from email.utils import formataddr
+
+    m = EmailMessage()
+    m["Subject"] = message.subject
+    m["From"] = formataddr((message.from_name, message.from_email))
+    m["To"] = formataddr((message.to_name or "", message.to_email))
+    if message.reply_to:
+        m["Reply-To"] = message.reply_to
+    for k, v in message.headers.items():
+        m[k] = v
+    m.set_content(message.text)
+    m.add_alternative(message.html, subtype="html")
+    for name, ctype, data in message.attachments:
+        main, _, sub = ctype.partition("/")
+        m.add_attachment(data, maintype=main, subtype=sub or "octet-stream", filename=name)
+    return m.as_bytes()
+
+
 class SesEmailProvider(EmailProvider):
     name = "ses"
 
@@ -37,6 +58,8 @@ class SesEmailProvider(EmailProvider):
                 }
             },
         }
+        if message.attachments:
+            kwargs["Content"] = {"Raw": {"Data": _raw_mime(message)}}
         if message.reply_to:
             kwargs["ReplyToAddresses"] = [message.reply_to]
         if self._configuration_set:

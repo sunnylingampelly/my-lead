@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -78,6 +79,11 @@ class UserOut(ORMModel):
     last_organization_id: str | None = None
     last_application_id: str | None = None
     created_at: datetime
+    mfa_enabled: bool = False
+    # An organization this user owns/administers requires 2FA and it is not set up yet.
+    mfa_setup_required: bool = False
+    # Platform super-admins without 2FA: the admin area nags them to turn it on.
+    mfa_recommended: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -85,6 +91,50 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserOut
+
+
+class MfaChallengeOut(BaseModel):
+    """Returned by /auth/login instead of tokens when the account has two-factor authentication on."""
+    mfa_required: Literal[True] = True
+    code: Literal["MFA_REQUIRED"] = "MFA_REQUIRED"
+    mfa_token: str
+    expires_in: int
+
+
+class MfaLoginRequest(BaseModel):
+    mfa_token: str = Field(min_length=20, max_length=1000)
+    code: str = Field(min_length=6, max_length=20)
+
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=20)
+
+
+class MfaDisableRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=20)
+
+
+class PasswordConfirmRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+class MfaStatusOut(BaseModel):
+    enabled: bool
+    enabled_at: datetime | None = None
+    recovery_codes_remaining: int = 0
+    required_by_organization: bool = False
+    recommended: bool = False
+
+
+class MfaSetupOut(BaseModel):
+    secret: str
+    otpauth_uri: str
+    qr_data_uri: str | None = None
+
+
+class RecoveryCodesOut(BaseModel):
+    recovery_codes: list[str]
 
 
 class SessionOut(ORMModel):

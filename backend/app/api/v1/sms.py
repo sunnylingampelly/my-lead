@@ -1,12 +1,12 @@
 """SMS endpoints, scoped to /apps/{app_id}/sms."""
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import DB, AppCtx
 from app.core.config import settings
-from app.core.errors import NotFound
+from app.core.errors import NotFound, ValidationFailed
 from app.core.permissions import Perm
 from app.schemas.common import Page, PageParams
 from app.schemas.email import Audience, Estimate, ScheduleRequest
@@ -30,8 +30,22 @@ from app.services.email.campaigns import custom_keys
 from app.services.email.readiness import safe_commit, wallet_info
 from app.services.sms import campaigns, registration, rules
 from app.services.sms.encoding import analyse
+from app.services.uae import SMS_GLOBAL_COMING_SOON
 
-router = APIRouter(prefix="/apps/{app_id}/sms", tags=["SMS"])
+
+def _sms_enabled(request: Request) -> None:
+    """SMS is "coming soon" everywhere while settings.SMS_ENABLED is off: every write/action is refused;
+    read-only GETs still answer. The DLT registration (PUT /registration) stays open: Indian voice calls use the
+    same TRAI DLT registration (Voice → Registration); its SMS-only part (the UAE SMS attestation) is refused
+    in update_registration."""
+    if request.method in ("GET", "HEAD", "OPTIONS") or settings.SMS_ENABLED:
+        return
+    if request.method == "PUT" and request.url.path.endswith("/registration"):
+        return
+    raise ValidationFailed(SMS_GLOBAL_COMING_SOON, code="SMS_COMING_SOON")
+
+
+router = APIRouter(prefix="/apps/{app_id}/sms", tags=["SMS"], dependencies=[Depends(_sms_enabled)])
 Paging = Annotated[PageParams, Depends()]
 
 
@@ -74,6 +88,8 @@ def get_registration(ctx: AppCtx, db: DB):
 
 @router.put("/registration", response_model=DltConfigOut)
 def update_registration(body: DltConfigIn, ctx: AppCtx, db: DB):
+    if body.uae_attest is not None and not settings.SMS_ENABLED:  # SMS-only (UAE TDRA) attestation
+        raise ValidationFailed(SMS_GLOBAL_COMING_SOON, code="SMS_COMING_SOON")
     out = registration.update_dlt(db, ctx, body)
     db.commit()
     return out
@@ -208,7 +224,7 @@ def readiness(campaign_id: str, ctx: AppCtx, db: DB):
     sender, country = campaigns.country_of(db, ctx, c)
     shape = campaigns.message_shape(c.body, country=country, category=c.category, append_opt_out=c.append_opt_out)
     cost = campaigns.cost_estimate(est.eligible if est else 0, shape["segments"], country, c.category)
-    return {"ready": all(ch.ok for ch in checks), "checks": [ch.model_dump() for ch in checks],
+    return {"ready": all(ch.ok or ch.warning for ch in checks), "checks": [ch.model_dump() for ch in checks],
             "estimate": est.model_dump() if est else None, "message": shape, "cost": cost,
             "country": country, "sender_chosen": sender is not None,
             "wallet": wallet_info(db, ctx.organization_id),

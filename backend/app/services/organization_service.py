@@ -74,7 +74,7 @@ def list_my_organizations(db: Session, user: User) -> list[MyOrganizationOut]:
         .where(OrganizationMember.user_id == user.id, Organization.deleted_at.is_(None))
         .order_by(Organization.name)
     ).all()
-    out = [_my_org(org, role, app_counts.get(org.id, 0)) for org, role in rows]
+    out = [_my_org(org, role, app_counts.get(org.id, 0), user) for org, role in rows]
     if user.platform_role in ("super_admin", "support"):
         from app.models.support import SupportGrant
         from app.utils.time import utcnow
@@ -93,12 +93,17 @@ def list_my_organizations(db: Session, user: User) -> list[MyOrganizationOut]:
     return out
 
 
-def _my_org(org: Organization, role_key: str, app_count: int = 0) -> MyOrganizationOut:
+def _my_org(org: Organization, role_key: str, app_count: int = 0, user: User | None = None) -> MyOrganizationOut:
+    from app.services.tenancy import effective_permissions, mfa_gate
+
     role = Role(role_key)
+    perms = effective_permissions(org, role, user) if user is not None else permissions_for(role)
     return MyOrganizationOut(
         id=org.id, name=org.name, slug=org.slug, status=org.status, industry=org.industry, website=org.website,
         country=org.country, created_at=org.created_at, role=role.value, role_label=ROLE_LABELS[role],
-        permissions=sorted(p.value for p in permissions_for(role)), application_count=app_count,
+        permissions=sorted(p.value for p in perms), application_count=app_count,
+        require_mfa_admins=bool(org.require_mfa_admins),
+        mfa_setup_required=user is not None and mfa_gate(org, role, user),
     )
 
 
@@ -108,7 +113,7 @@ def describe_for_member(db: Session, ctx: OrgContext) -> MyOrganizationOut:
             Application.organization_id == ctx.organization_id, Application.deleted_at.is_(None)
         )
     )
-    out = _my_org(ctx.organization, ctx.role.value, count or 0)
+    out = _my_org(ctx.organization, ctx.role.value, count or 0, ctx.user)
     if ctx.support:
         from app.services.tenancy import active_support_grant
 
@@ -121,6 +126,16 @@ def update_organization(db: Session, ctx: OrgContext, data: OrganizationUpdate) 
     ctx.require(Perm.ORG_UPDATE)
     org = ctx.organization
     changes = data.model_dump(exclude_unset=True)
+    if changes.get("require_mfa_admins") is None:
+        changes.pop("require_mfa_admins", None)
+    elif changes["require_mfa_admins"] and not ctx.user.mfa_enabled:
+        # Requiring it without having it would lock the actor out of the very setting they just changed.
+        raise ValidationFailed("Turn on two-factor authentication for your own account first (Account → Security)",
+                               code="MFA_REQUIRED_FOR_SELF")
+    if "require_mfa_admins" in changes and changes["require_mfa_admins"] != org.require_mfa_admins:
+        audit_service.record(db, "organization.mfa_requirement_changed", actor_user_id=ctx.user.id,
+                             organization_id=org.id, target_type="organization", target_id=org.id,
+                             meta={"require_mfa_admins": changes["require_mfa_admins"]})
     for field, value in changes.items():
         if field == "website" and value is not None:
             value = str(value)

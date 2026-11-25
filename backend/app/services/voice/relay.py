@@ -65,7 +65,10 @@ def _load(call_id: str) -> dict | None:
         values = ai.values_for(None, _business_name(db, campaign), contact)
         transcript = list(call.transcript or [])
         if not transcript:
-            transcript = [{"role": "assistant", "text": ai.greeting_for(agent, values), "at": utcnow().isoformat()}]
+            from app.services.voice.script import agent_greeting
+
+            opening = agent_greeting(campaign.snapshot or {}, values)  # UAE: recording notice + AI disclosure
+            transcript = [{"role": "assistant", "text": opening, "at": utcnow().isoformat()}]
             call.transcript = transcript
             db.commit()
         return {"agent": agent, "values": values, "transcript": transcript}

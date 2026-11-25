@@ -16,7 +16,7 @@ from app.providers.voice.factory import provider_for
 from app.schemas.common import Page, PageParams
 from app.schemas.email import Estimate, ReadinessCheck, ScheduleRequest
 from app.schemas.voice import CallOut, CampaignCreate, CampaignListItem, CampaignOut, CampaignUpdate, Stats, TestCall
-from app.services import audit_service
+from app.services import audit_service, uae
 from app.services.audience.query import base_query, count, eligibility_condition
 from app.services.email import readiness as rd
 from app.services.email import render
@@ -32,7 +32,16 @@ ACTIVE = ("queued", "sending", "paused")
 PENDING = ("queued", "deferred")
 IN_FLIGHT = ("placing", "dialing", "ringing", "in_progress")
 ANSWERED = ("completed", "voicemail")
-COUNTRY_NAME = {"IN": "India", "US": "the United States"}
+COUNTRY_NAME = {"IN": "India", "AE": "the UAE", "US": "the United States"}
+# What applies to UAE calls once they are switched on (shown with the "coming soon" state).
+UAE_RULES = (
+    "Calls only 09:00–18:00 UAE time, Monday to Friday",
+    "Calls come from your own licensed UAE number",
+    "Every call starts with a recording notice and, for AI agents, an AI disclosure",
+    "Anyone who says no is never called again",
+    "Unanswered calls are retried at most once a day and twice a week",
+    "Numbers on the UAE Do Not Call Registry (DNCR) are never called",
+)
 
 
 
@@ -57,7 +66,7 @@ def campaign_country(db: Session, c: VoiceCampaign) -> str | None:
 
     app = db.get(Application, c.application_id)
     country = (getattr(app, "default_country", None) or "").upper()
-    return country if country in ("IN", "US") else None
+    return country if country in ("IN", "AE", "US") else None
 
 
 def caller_kinds(country: str | None, category: str) -> tuple[str, ...]:
@@ -165,7 +174,12 @@ def draft_snapshot(db: Session, c: VoiceCampaign) -> dict | None:
     audio = audio_of(db, c)
     if audio is None:
         return None
-    return {**script.snapshot_message(audio, caller, c), "message_type": message_type_of(db, c)}
+    snap = {**script.snapshot_message(audio, caller, c), "message_type": message_type_of(db, c)}
+    if country == "AE":  # the UAE recording notice names the business
+        from app.services.voice.ai_results import _business_name
+
+        snap["business_name"] = _business_name(db, c)
+    return snap
 
 
 def cost_estimate(recipients: int, seconds: float, country: str | None, ai: bool = False) -> dict:
@@ -216,10 +230,16 @@ def readiness(db: Session, ctx, c: VoiceCampaign) -> tuple[list[ReadinessCheck],
     from app.services.voice.numbers import availability
 
     what = {"promotional": "promotional", "transactional": "transactional", "service": "service"}[c.category]
-    problem = availability(db, country, c.category, ai=ai_call)
-    checks.append(_check("calling", f"Signalcraft can place {what} calls to {COUNTRY_NAME.get(country, 'this market')}",
-                         problem is None, problem, step="setup",
-                         meta={"note": "Calls come from a Signalcraft-managed number"}))
+    blocked = uae.voice_blocked(country)
+    if blocked:
+        # Kill switch (VOICE_UAE_ENABLED): UAE calls are "coming soon".
+        checks.append(_check("uae_available", "Calls to the UAE", False, blocked, step="setup",
+                             meta={"rules": list(UAE_RULES)}))
+    else:
+        problem = availability(db, country, c.category, ai=ai_call)
+        checks.append(_check("calling", f"Signalcraft can place {what} calls to {COUNTRY_NAME.get(country, 'this market')}",
+                             problem is None, problem, step="setup",
+                             meta={"note": "Calls come from a Signalcraft-managed number"}))
     if country == "IN":
         reg = dlt_row(db, c.application_id)
         checks.append(_check("registration", "TRAI DLT entity registration",
@@ -719,5 +739,8 @@ def _setup_facts(db: Session, ctx) -> dict:
     country = rd.effective_country(ctx, None)
     consented = count(db, base_query(ctx).where(eligibility_condition("voice"),
                                                 *([Contact.phone_country == country] if country else [])))
+    blocked = uae.voice_blocked(country)
     return {"default_country": country, "dlt_registered": bool(reg and reg.principal_entity_id and reg.attested_at),
-            "consented": consented}
+            "consented": consented,
+            # UAE: "coming soon" while VOICE_UAE_ENABLED is off, with the rules that will apply.
+            "coming_soon": blocked, "market_rules": list(UAE_RULES) if country == "AE" else []}

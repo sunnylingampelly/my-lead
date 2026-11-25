@@ -13,6 +13,7 @@ class SmsDltConfiguration(TenantMixin, TimestampMixin, Base):
     """Regulatory registration for an application.
 
     India: TRAI DLT Principal Entity (PE) registration.
+    UAE: an attestation that the business is UAE-licensed and uploaded its consents to TDRA's CMS.
     US: A2P 10DLC brand and campaign registration (via The Campaign Registry / the provider).
     Entering these values does not mean they are approved; the attestation records who confirmed
     the registration and when, and providers reject traffic that does not match.
@@ -29,6 +30,11 @@ class SmsDltConfiguration(TenantMixin, TimestampMixin, Base):
     us_campaign_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attested_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     attested_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # UAE: who confirmed the business is UAE-licensed and has uploaded its consents to TDRA's Consent
+    # Management System, and when (required for promotional UAE SMS).
+    uae_attested_by_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_sms_dlt_uae_attested_by"), nullable=True)
+    uae_attested_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class SmsSender(TenantMixin, TimestampMixin, Base):

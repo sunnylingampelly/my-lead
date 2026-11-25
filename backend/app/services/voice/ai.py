@@ -96,6 +96,9 @@ def system_blocks(agent: dict, values: dict[str, str]) -> list[dict]:
     rules = PLATFORM_RULES + (TRANSFER_RULE if agent.get("transfer_number") else NO_TRANSFER_RULE)
     instructions = personalise(agent.get("instructions"), {**stable_vals, "first_name": "the person"})
     goal = (agent.get("goal") or "").strip()
+    if (agent.get("language") or "").startswith("ar"):
+        rules += ("\n- Speak in Arabic (Gulf Arabic or Modern Standard Arabic). If the person answers in English, "
+                  "switch to English.")
     blocks = [
         {"type": "text", "text": rules},
         {"type": "text", "text": f"You are calling on behalf of {business}.\n"

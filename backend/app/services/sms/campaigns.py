@@ -16,7 +16,7 @@ from app.providers.sms.factory import live_credentials_missing, provider_for
 from app.schemas.common import Page, PageParams
 from app.schemas.email import Estimate, ReadinessCheck, ScheduleRequest
 from app.schemas.sms import CampaignCreate, CampaignListItem, CampaignOut, CampaignUpdate, MessageOut, Stats, TestSend
-from app.services import audit_service
+from app.services import audit_service, uae
 from app.services.audience.query import base_query, count, eligibility_condition
 from app.services.email import readiness as rd
 from app.services.email import render
@@ -30,7 +30,16 @@ from app.utils.time import utcnow
 
 EDITABLE = ("draft",)
 ACTIVE = ("queued", "sending", "paused")
-COUNTRY_NAME = {"IN": "India", "US": "the United States"}
+COUNTRY_NAME = {"IN": "India", "AE": "the UAE", "US": "the United States"}
+# What applies to UAE SMS once it is switched on (shown with the "coming soon" state).
+UAE_SMS_RULES = (
+    "Promotional sender IDs start with \"AD-\" (11 characters at most, including the prefix)",
+    "Promotional texts are not delivered from 21:00 to 07:00 UAE time; they wait until 07:00",
+    "Opt-out text is added to every promotional text (in Arabic for Arabic messages)",
+    "Only UAE-licensed businesses that upload their consents to TDRA's Consent Management System may send "
+    "promotional texts",
+    "Links, phone numbers and WhatsApp links must be allow-listed with the carrier",
+)
 
 
 
@@ -153,8 +162,48 @@ def quiet_wait(db: Session, ctx, c: SmsCampaign, country: str | None) -> dict:
     return {**out, **(w or {})}
 
 
+def uae_attested(reg) -> bool:
+    return bool(reg and reg.uae_attested_at)
+
+
+def uae_checks(db: Session, ctx, c: SmsCampaign, sender: SmsSender | None, pending: bool) -> list[ReadinessCheck]:
+    """UAE (TDRA) rules. The kill switch comes first: while SMS_UAE_ENABLED is off nothing can be sent."""
+    out: list[ReadinessCheck] = []
+    blocked = uae.sms_blocked("AE")
+    out.append(_check("uae_available", "SMS to the UAE", blocked is None, blocked, step="setup"))
+    reg_url = rd.app_url(ctx, "/sms/registration")
+    if c.category == "promotional":
+        out.append(_check("uae_attestation", "UAE licence and TDRA consent upload", uae_attested(dlt_row(db, c.application_id)),
+                          "Promotional SMS in the UAE may only come from UAE-licensed businesses whose recipients' "
+                          "consents are uploaded to TDRA's Consent Management System. Confirm both.",
+                          action_url=reg_url, action_label="UAE confirmation"))
+        if sender is None:
+            out.append(_check("category", "\"AD-\" sender ID for promotional texts", False,
+                              "UAE promotional texts need a sender ID starting with \"AD-\"", step="setup",
+                              action_url=rd.app_url(ctx, "/sms/senders"), action_label="Add sender ID",
+                              pending=True))
+        else:
+            out.append(_check("category", "\"AD-\" sender ID for promotional texts",
+                              sender.sender_id.startswith(uae.PROMO_PREFIX),
+                              "UAE promotional texts need a sender ID starting with \"AD-\"", step="setup"))
+        out.append(_check("opt_out", "Opt-out text", True))  # appended automatically (rules.final_body)
+    elif sender is not None:
+        out.append(_check("category", "Sender ID matches message category",
+                          not sender.sender_id.startswith(uae.PROMO_PREFIX),
+                          "\"AD-\" sender IDs are for promotional texts only", step="setup"))
+    if uae.has_url(c.body):
+        w = _check("uae_links", "Links in the message", False,
+                   "UAE carriers block links, phone numbers and WhatsApp links unless they were allow-listed with "
+                   "your sender ID. Remove the link or make sure it is allow-listed.", step="message")
+        w.warning = True
+        out.append(w)
+    return out
+
+
 def readiness(db: Session, ctx, c: SmsCampaign) -> tuple[list[ReadinessCheck], Estimate | None]:
     checks: list[ReadinessCheck] = []
+    if not settings.SMS_ENABLED:
+        checks.append(_check("sms_available", "SMS", False, uae.SMS_GLOBAL_COMING_SOON, step="setup"))
     sender, country = country_of(db, ctx, c)
     senders_url, reg_url = rd.app_url(ctx, "/sms/senders"), rd.app_url(ctx, "/sms/registration")
     templates_url = rd.app_url(ctx, "/sms/templates")
@@ -210,6 +259,13 @@ def readiness(db: Session, ctx, c: SmsCampaign) -> tuple[list[ReadinessCheck], E
             checks.append(_check("opt_out", "Opt-out instructions (STOP)", ok,
                                  "US marketing texts must tell people how to opt out. Turn on “Reply STOP to "
                                  "opt out” or add it to the message.", step="message"))
+    elif country == "AE":
+        checks.extend(uae_checks(db, ctx, c, sender, pending))
+    if country != "AE":
+        # Kill switch also covers a UAE application texting another market.
+        blocked = uae.sms_blocked(getattr(ctx.application, "default_country", None))
+        if blocked:
+            checks.append(_check("uae_available", "SMS to the UAE", False, blocked, step="setup"))
 
     body_ok = bool((c.body or "").strip())
     checks.append(_check("content", "Message text", body_ok, "Write the message", step="message"))
@@ -253,7 +309,7 @@ def readiness(db: Session, ctx, c: SmsCampaign) -> tuple[list[ReadinessCheck], E
 
 def _require_ready(db: Session, ctx, c: SmsCampaign) -> None:
     checks, _ = readiness(db, ctx, c)
-    failing = [ch for ch in checks if not ch.ok]
+    failing = [ch for ch in checks if not ch.ok and not ch.warning]
     if failing:
         raise ValidationFailed("This campaign is not ready to send", code="CAMPAIGN_NOT_READY",
                                details=[ch.model_dump() for ch in failing])
@@ -419,6 +475,10 @@ def send_test(db: Session, ctx: AppContext, campaign_id: str, data: TestSend) ->
         parsed = parse_phone(raw, sender.country)
         if parsed is None:
             results.append({"phone": raw, "accepted": False, "error": "Not a valid phone number"})
+            continue
+        blocked = uae.sms_blocked(parsed.country, parsed.e164)
+        if blocked:
+            results.append({"phone": parsed.e164, "accepted": False, "error": blocked})
             continue
         if parsed.country != sender.country:
             results.append({"phone": parsed.e164, "accepted": False,
@@ -655,7 +715,8 @@ def overview(db: Session, ctx: AppContext) -> dict:
         "upcoming": [CampaignListItem.model_validate(r).model_dump(mode="json") for r in upcoming],
         "senders": dict(senders),
         "registration": {"india": bool(reg and reg.principal_entity_id and reg.attested_at),
-                         "us": bool(reg and reg.us_brand_id and reg.us_campaign_id and reg.attested_at)},
+                         "us": bool(reg and reg.us_brand_id and reg.us_campaign_id and reg.attested_at),
+                         "uae": uae_attested(reg)},
         "setup": setup_facts(db, ctx),
     }
 
@@ -663,9 +724,13 @@ def overview(db: Session, ctx: AppContext) -> dict:
 def setup_facts(db: Session, ctx) -> dict:
     """What the overview's setup checklist needs, per market."""
     consented = dict(db.execute(
-        base_query(ctx).where(eligibility_condition("sms"), Contact.phone_country.in_(("IN", "US")))
+        base_query(ctx).where(eligibility_condition("sms"), Contact.phone_country.in_(("IN", "AE", "US")))
         .with_only_columns(Contact.phone_country, func.count()).group_by(Contact.phone_country).order_by(None)).all())
     dlt_templates = db.scalar(select(func.count()).select_from(SmsTemplate).where(
         SmsTemplate.application_id == ctx.application_id, SmsTemplate.dlt_template_id.is_not(None))) or 0
-    return {"consented": {"IN": consented.get("IN", 0), "US": consented.get("US", 0)},
-            "dlt_templates": dlt_templates, "default_country": rd.effective_country(ctx, None)}
+    country = rd.effective_country(ctx, None)
+    return {"consented": {"IN": consented.get("IN", 0), "AE": consented.get("AE", 0), "US": consented.get("US", 0)},
+            "dlt_templates": dlt_templates, "default_country": country,
+            # UAE: "coming soon" while SMS_UAE_ENABLED is off, with the rules that will apply.
+            "coming_soon": uae.sms_blocked(country), "market_rules": list(UAE_SMS_RULES) if country == "AE" else [],
+            "uae_attested": uae_attested(dlt_row(db, ctx.application_id))}

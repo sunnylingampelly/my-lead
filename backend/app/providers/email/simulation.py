@@ -27,6 +27,7 @@ class SimulationEmailProvider(EmailProvider):
             "text": message.text,
             "html": message.html,
             "tags": list(message.tags),
+            "attachments": [{"name": n, "content_type": ct, "size": len(d)} for n, ct, d in message.attachments],
             "created_at": utcnow().isoformat(),
         }
         stamp = utcnow().strftime("%Y%m%dT%H%M%S%f")

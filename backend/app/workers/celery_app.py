@@ -13,7 +13,7 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
     include=["app.tasks.system_email", "app.tasks.maintenance", "app.tasks.imports", "app.tasks.email", "app.tasks.sms",
              "app.tasks.voice", "app.tasks.automation", "app.tasks.billing", "app.tasks.payments", "app.tasks.crm",
-             "app.tasks.chat"],
+             "app.tasks.chat", "app.tasks.ai_team"],
 )
 
 celery_app.conf.update(
@@ -41,6 +41,7 @@ celery_app.conf.update(
         "app.tasks.automation.*": {"queue": "campaigns"},
         "app.tasks.crm.*": {"queue": "default"},
         "app.tasks.chat.*": {"queue": "default"},
+        "app.tasks.ai_team.*": {"queue": "default"},
         "app.tasks.billing.*": {"queue": "default"},
         "app.tasks.payments.*": {"queue": "webhooks"},
     },
@@ -73,6 +74,10 @@ celery_app.conf.update(
             "task": "app.tasks.chat.chat_tick",
             "schedule": 60.0,
         },
+        "ai-team-tick": {
+            "task": "app.tasks.ai_team.ai_team_tick",
+            "schedule": 60.0,
+        },
         "automation-tick": {
             "task": "app.tasks.automation.automation_tick",
             "schedule": 20.0,
@@ -84,6 +89,10 @@ celery_app.conf.update(
         "renew-subscriptions": {
             "task": "app.tasks.billing.renew_subscriptions",
             "schedule": crontab(minute="*/10"),
+        },
+        "check-sender-domains": {
+            "task": "app.tasks.email.check_sender_domains",
+            "schedule": crontab(minute=23, hour=2),
         },
         "resume-stalled-imports": {
             "task": "app.tasks.imports.resume_stalled_imports",

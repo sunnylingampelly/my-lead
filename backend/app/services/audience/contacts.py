@@ -39,7 +39,7 @@ from app.services.audience import consent as consent_svc
 from app.services.audience.normalize import NormalizedContact, check_identity, identity_keys, normalize_contact
 from app.services.audience.query import apply_filters, apply_sort, base_query, count
 from app.services.billing import plans
-from app.services.regions import profile_for
+from app.services.regions import SUPPORTED_REGIONS, profile_for
 from app.services.tenancy import AppContext
 from app.utils.contact_normalize import InvalidValue, format_phone, identifier_hash
 
@@ -104,7 +104,8 @@ def detail(db: Session, ctx: AppContext, contact_id: str) -> ContactDetail:
         timezone=c.timezone, source=c.source, attributes=c.attributes or {},
         lists=[{"id": i, "name": n} for i, n in lists], email_unsubscribed_at=c.email_unsubscribed_at,
         sms_unsubscribed_at=c.sms_unsubscribed_at, voice_unsubscribed_at=c.voice_unsubscribed_at,
-        jurisdiction=jur, jurisdiction_name=profile_for(jur).name if jur in ("IN", "US") else (jur or "Unknown"),
+        dncr_registered=bool(c.dncr_registered), jurisdiction=jur,
+        jurisdiction_name=profile_for(jur).name if jur in SUPPORTED_REGIONS else (jur or "Unknown"),
         eligibility=consent_svc.eligibility(db, ctx, c), updated_at=c.updated_at,
     )
 
@@ -124,7 +125,8 @@ def list_contacts(db: Session, ctx: AppContext, filters: ContactFilters, params:
 
 def _normalize(db: Session, ctx: AppContext, data, defs) -> NormalizedContact:
     raw = data.model_dump(exclude_unset=True, exclude={"tag_ids", "list_ids", "consent", "status", "phone_country",
-                                                       "company_id", "owner_id", "lifecycle_stage", "clear_owner"})
+                                                       "company_id", "owner_id", "lifecycle_stage", "clear_owner",
+                                                       "dncr_registered"})
     try:
         return normalize_contact(raw, default_country=ctx.application.default_country, attr_defs=defs,
                                  phone_country_hint=data.phone_country)
@@ -336,6 +338,12 @@ def update_contact(db: Session, ctx: AppContext, contact_id: str, data: ContactU
         consent_svc.record_activity(db, ctx, c.id, "status_changed", f"Status changed to {data.status}",
                                     {"from": c.status, "to": data.status}, ctx.user.id)
         c.status = data.status
+    if data.dncr_registered is not None and data.dncr_registered != bool(c.dncr_registered):
+        c.dncr_registered = data.dncr_registered
+        consent_svc.record_activity(db, ctx, c.id, "dncr_changed",
+                                    "Marked as on the UAE Do Not Call Registry" if data.dncr_registered
+                                    else "Removed from the UAE Do Not Call Registry flag",
+                                    {"dncr_registered": data.dncr_registered}, ctx.user.id)
     consent_svc.record_activity(db, ctx, c.id, "updated", "Contact details updated",
                                 {"fields": sorted(n.provided)}, ctx.user.id)
     return c

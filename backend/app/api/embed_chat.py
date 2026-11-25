@@ -73,7 +73,7 @@ def asset(name: str, v: str | None = Query(None, max_length=40)):
 def _csp(bot: ChatBot) -> str:
     return ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; "
             "connect-src 'self'; font-src 'self'; media-src 'self' data:; base-uri 'none'; form-action 'none'; "
-            + frame_ancestors(bot.allowed_domains))
+            + frame_ancestors(bot.allowed_domains, empty_means_any=False))
 
 
 @router.get("/chat/{public_key}", response_class=HTMLResponse)

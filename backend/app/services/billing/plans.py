@@ -1,7 +1,7 @@
 """Plans: Starter and Pro, on top of the prepaid wallet (pay as you go).
 
 Model
-* Every organization has a prepaid wallet in its own currency (INR for India, USD otherwise). All usage
+* Every organization has a prepaid wallet in its own currency (INR for India, AED for the UAE, USD otherwise). All usage
   (email, SMS, voice minutes, AI-agent minutes) and the Pro fee is debited from it.
 * Starter costs nothing per month: standard usage rates and modest limits.
 * Pro has a monthly fee, debited from the wallet, with lower usage rates and higher limits.
@@ -35,12 +35,14 @@ PLANS: dict[str, dict] = {
         "key": STARTER,
         "name": "Starter",
         "tagline": "Pay only for what you send. No monthly fee.",
-        "price": {"INR": Decimal("0"), "USD": Decimal("0")},
+        "price": {"INR": Decimal("0"), "AED": Decimal("0"), "USD": Decimal("0")},
         "usage_discount": Decimal("0"),
         "limits": {"applications": 2, "members": 3, "voice_agents": 1, "contacts": 10_000,
-                   "lead_forms": 3, "chatbots": 1, "chat_seats": 2},
+                   "lead_forms": 3, "chatbots": 1, "chat_seats": 2,
+                   "ai_assistant_messages_per_day": 50, "ai_agent_runs_per_day": 100},
         "features": ["Email, SMS and voice campaigns", "CRM and automation", "1 AI calling agent",
-                     "3 lead forms", "1 website chatbot, 2 live-chat agents", "Up to 3 team members"],
+                     "3 lead forms", "1 website chatbot, 2 live-chat agents", "Up to 3 team members",
+                     "AI Team: 50 assistant messages and 100 agent runs a day"],
         # Lead forms carry Signalcraft branding on Starter.
         "form_branding": True,
     },
@@ -48,20 +50,23 @@ PLANS: dict[str, dict] = {
         "key": PRO,
         "name": "Pro",
         "tagline": "Lower rates and room to grow.",
-        "price": {"INR": Decimal("2999"), "USD": Decimal("49")},
+        "price": {"INR": Decimal("2999"), "AED": Decimal("179"), "USD": Decimal("49")},
         "usage_discount": Decimal("0.20"),
         "limits": {"applications": 10, "members": 25, "voice_agents": 20, "contacts": None,
-                   "lead_forms": None, "chatbots": 10, "chat_seats": 25},
-        "features": ["Everything in Starter", "20% off all usage", "Up to 20 AI agents", "Up to 25 team members",
+                   "lead_forms": None, "chatbots": 10, "chat_seats": 25,
+                   "ai_assistant_messages_per_day": 500, "ai_agent_runs_per_day": 2000},
+        "features": ["Everything in Starter", "20% off all usage", "Up to 20 AI calling agents", "Up to 25 team members",
                      "Unlimited contacts", "Unlimited lead forms, no Signalcraft branding",
-                     "10 website chatbots, 25 live-chat agents"],
+                     "10 website chatbots, 25 live-chat agents",
+                     "AI Team: 500 assistant messages and 2,000 agent runs a day"],
         "form_branding": False,
     },
 }
 
 LIMIT_LABELS = {"applications": "applications", "members": "team members", "voice_agents": "AI agents",
                 "contacts": "contacts", "lead_forms": "lead forms", "chatbots": "chatbots",
-                "chat_seats": "live-chat agents"}
+                "chat_seats": "live-chat agents", "ai_assistant_messages_per_day": "AI Assistant messages a day",
+                "ai_agent_runs_per_day": "AI agent runs a day"}
 
 # Grace period after a failed Pro renewal before the organization moves to Starter.
 GRACE_DAYS = 7

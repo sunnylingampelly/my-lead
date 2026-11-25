@@ -200,6 +200,12 @@ def readiness(db: Session, ctx, c: EmailCampaign) -> tuple[list[ReadinessCheck],
         f"{sender.from_email} is not verified yet. Open the confirmation email we sent to it, or resend it.",
         step="setup", action_url=senders_url, action_label="Manage senders",
         meta={"sender_id": sender.id, "status": sender.status, "from_email": sender.from_email} if sender else None))
+    if sender is not None:
+        from app.services.email.domains import readiness_check as domain_check
+
+        dc = domain_check(db, ctx, sender)
+        if dc is not None:
+            checks.append(dc)
     checks.append(check("subject", "Subject line", bool((c.subject or "").strip()), "Add a subject", step="setup"))
     has_body = bool((c.html or "").strip() or (c.text or "").strip())
     checks.append(check("content", "Email content", has_body, "Design the email", step="content"))
@@ -239,7 +245,7 @@ def readiness(db: Session, ctx, c: EmailCampaign) -> tuple[list[ReadinessCheck],
 
 def _require_ready(db: Session, ctx, c: EmailCampaign) -> None:
     checks, _ = readiness(db, ctx, c)
-    failing = [ch for ch in checks if not ch.ok]
+    failing = [ch for ch in checks if not ch.ok and not ch.warning]
     if failing:
         raise ValidationFailed("This campaign is not ready to send", code="CAMPAIGN_NOT_READY",
                                details=[ch.model_dump() for ch in failing])

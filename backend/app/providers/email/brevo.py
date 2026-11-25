@@ -29,6 +29,11 @@ class BrevoEmailProvider(EmailProvider):
             payload["headers"] = message.headers
         if message.tags:
             payload["tags"] = list(message.tags)
+        if message.attachments:
+            import base64
+
+            payload["attachment"] = [{"name": name, "content": base64.b64encode(data).decode()}
+                                     for name, _, data in message.attachments]
         try:
             resp = httpx.post(
                 BREVO_URL,

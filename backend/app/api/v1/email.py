@@ -100,6 +100,22 @@ def delete_sender(sender_id: str, ctx: AppCtx, db: DB):
     db.commit()
 
 
+@router.get("/senders/{sender_id}/domain")
+def sender_domain(sender_id: str, ctx: AppCtx, db: DB):
+    """SPF / DKIM / DMARC / MX status of the sender's domain (cached for 10 minutes)."""
+    from app.services.email import domains
+
+    return domains.sender_domain(db, ctx, sender_id)
+
+
+@router.post("/senders/{sender_id}/domain/check")
+def check_sender_domain(sender_id: str, ctx: AppCtx, db: DB):
+    """Check the DNS records again now ("Check again")."""
+    from app.services.email import domains
+
+    return domains.sender_domain(db, ctx, sender_id, force=True)
+
+
 @router.get("/senders/{sender_id}/tips")
 def sender_tips(sender_id: str, ctx: AppCtx, db: DB):
     s = senders._get(db, ctx, sender_id)
@@ -201,7 +217,7 @@ def readiness(campaign_id: str, ctx: AppCtx, db: DB):
     country = ctx.application.default_country if ctx.application else None
     price, cur = wl.email_price(country)
     eligible = est.eligible if est else 0
-    return {"ready": all(ch.ok for ch in checks), "checks": [ch.model_dump() for ch in checks],
+    return {"ready": all(ch.ok or ch.warning for ch in checks), "checks": [ch.model_dump() for ch in checks],
             "estimate": est.model_dump() if est else None,
             "cost": {"unit_price": float(price), "currency": cur, "total": round(float(price) * eligible, 2)},
             "wallet": wallet_info(db, ctx.organization_id),

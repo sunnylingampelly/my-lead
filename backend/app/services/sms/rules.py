@@ -1,9 +1,14 @@
-"""Regulatory and delivery rules for SMS in India and the United States."""
+"""Regulatory and delivery rules for SMS in India, the UAE and the United States.
+
+UAE (TDRA): promotional sender IDs start with "AD-" (11 characters at most, prefix included), promotional
+texts are not delivered 21:00-07:00 UAE time and always carry opt-out text. UAE SMS is switched off until
+settings.SMS_UAE_ENABLED (see app/services/uae.py)."""
 import re
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
+from app.services import uae
 from app.services.email.render import VAR_RE
 
 DLT_VAR_RE = re.compile(r"\{#\s*var\s*#\}", re.I)
@@ -30,8 +35,10 @@ def validate_sender(country: str, kind: str, sender_id: str) -> str | None:
             return "Enter the number in E.164 format, for example +14155550123."
         if kind not in ("long_code", "toll_free", "short_code"):
             return "Choose 10DLC long code, toll-free or short code."
+    elif country == "AE":
+        return uae.validate_sender(kind, sender_id)
     else:
-        return "SMS is supported for India and the United States."
+        return "SMS is supported for India, the UAE and the United States."
     return None
 
 
@@ -52,7 +59,32 @@ def final_body(body: str, *, country: str, category: str, append_opt_out: bool) 
     text = (body or "").strip()
     if country == "US" and category == "promotional" and append_opt_out and "stop" not in text.lower():
         text = f"{text} {OPT_OUT_TEXT}"
+    # UAE promotional SMS must carry opt-out text: always appended (Arabic for Arabic messages).
+    if country == "AE" and category == "promotional" and not uae.has_opt_out(text):
+        text = f"{text}\n{uae.opt_out_text(text)}"
     return text
+
+
+def promo_quiet(country: str | None, app_quiet: tuple[str, str]) -> list[tuple[str | None, str, str]]:
+    """Quiet windows for a promotional text as (timezone or None for the recipient's, start, end).
+    The UAE adds its legal 21:00-07:00 window in UAE time on top of the app's quiet hours."""
+    windows: list[tuple[str | None, str, str]] = [(None, *app_quiet)]
+    if country == "AE":
+        windows.append((uae.TIMEZONE, *uae.SMS_PROMO_QUIET))
+    return windows
+
+
+def promo_resume_at(now_utc: datetime, country: str | None, recipient_tz: str | None,
+                    app_quiet: tuple[str, str]) -> datetime | None:
+    """None when a promotional text may go now; otherwise when the latest applicable quiet window ends."""
+    at = now_utc
+    for _ in range(4):
+        later = [r for r in (quiet_until(at, tz or recipient_tz, s, e) for tz, s, e in promo_quiet(country, app_quiet))
+                 if r is not None]
+        if not later:
+            return None if at == now_utc else at
+        at = max(later)
+    return at
 
 
 def price(country: str | None, category: str) -> tuple[float, str]:

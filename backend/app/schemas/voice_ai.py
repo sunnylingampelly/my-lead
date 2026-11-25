@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
 
-AgentLanguage = Literal["en-IN", "hi-IN", "ta-IN", "te-IN", "en-US", "es-US"]
+AgentLanguage = Literal["en-IN", "hi-IN", "ta-IN", "te-IN", "en-US", "es-US", "ar-AE"]
 FieldType = Literal["text", "yes_no", "number", "date", "choice"]
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_INSTRUCTIONS = 8000

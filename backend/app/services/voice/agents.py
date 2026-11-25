@@ -160,7 +160,8 @@ def _check_limit(db: Session, ctx) -> None:
 
 
 def _default_language(ctx) -> str:
-    return "en-US" if (getattr(ctx.application, "default_country", None) or "") == "US" else "en-IN"
+    country = getattr(ctx.application, "default_country", None) or ""
+    return "en-US" if country in ("US", "AE") else "en-IN"
 
 
 def create_agent(db: Session, ctx, data: AgentCreate) -> VoiceAgent:

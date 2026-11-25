@@ -79,7 +79,7 @@ def load_bot(db, request: Request, public_key: str, host: str | None = None) -> 
     # frame-ancestors). Non-browser clients can forge either, so this is an abuse guard, not authentication.
     origin = request.headers.get("origin")
     for candidate in (origin, site):
-        if candidate and not origin_allowed(candidate, bot.allowed_domains):
+        if candidate and not origin_allowed(candidate, bot.allowed_domains, empty_means_any=False):
             raise Forbidden("This website isn't allowed to use this chat", code="ORIGIN_NOT_ALLOWED")
     _hit(f"bot:{bot.id}", 3000)
     return bot

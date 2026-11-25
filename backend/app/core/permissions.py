@@ -91,6 +91,9 @@ class Perm(StrEnum):
     CHAT_REPLY = "chat.reply"
     FORMS_READ = "forms.read"
     FORMS_WRITE = "forms.write"
+    PRIVACY_MANAGE = "privacy.manage"
+    AI_USE = "ai.use"
+    AI_MANAGE = "ai.manage"
 
 
 PERMISSION_DESCRIPTIONS = {
@@ -128,7 +131,17 @@ PERMISSION_DESCRIPTIONS = {
     Perm.CHAT_REPLY: "Answer visitors in the live-chat inbox",
     Perm.FORMS_READ: "View lead forms, their submissions and analytics",
     Perm.FORMS_WRITE: "Create, edit and publish lead forms and manage submissions",
+    Perm.PRIVACY_MANAGE: "Handle data-subject requests: download all of a contact's data and erase contacts",
+    Perm.AI_USE: "Use the AI Assistant (it can only do what the person's own role allows, after confirmation)",
+    Perm.AI_MANAGE: "Create and manage AI agents, approve their actions and connect Slack",
 }
+
+# Organization-administration permissions that are withheld from owners and admins who have not set up
+# two-factor authentication while their organization requires it.
+MFA_GATED_PERMS = frozenset({
+    Perm.ORG_UPDATE, Perm.ORG_DELETE, Perm.MEMBERS_INVITE, Perm.MEMBERS_UPDATE, Perm.MEMBERS_REMOVE,
+    Perm.APP_DELETE, Perm.BILLING_MANAGE, Perm.PRIVACY_MANAGE,
+})
 
 _ALL = set(Perm)
 _APP_WORK = {
@@ -137,6 +150,7 @@ _APP_WORK = {
     Perm.CRM_READ, Perm.CRM_WRITE,
     Perm.CHAT_READ, Perm.CHAT_WRITE, Perm.CHAT_REPLY,
     Perm.FORMS_READ, Perm.FORMS_WRITE,
+    Perm.AI_USE, Perm.AI_MANAGE,
 }
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Perm]] = {
@@ -151,11 +165,13 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Perm]] = {
     Role.ANALYST: frozenset(
         {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ,
          Perm.AUTOMATION_READ, Perm.ANALYTICS_READ, Perm.SETTINGS_READ, Perm.BILLING_READ, Perm.CRM_READ,
-         Perm.CHAT_READ, Perm.FORMS_READ}
+         Perm.CHAT_READ, Perm.FORMS_READ, Perm.AI_USE}
     ),
+    # Viewers can ask the assistant questions too: its tools run with the viewer's own (read-only) permissions,
+    # so every write tool is unavailable to them.
     Role.VIEWER: frozenset(
         {Perm.ORG_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ, Perm.AUTOMATION_READ,
-         Perm.ANALYTICS_READ, Perm.CRM_READ, Perm.CHAT_READ, Perm.FORMS_READ}
+         Perm.ANALYTICS_READ, Perm.CRM_READ, Perm.CHAT_READ, Perm.FORMS_READ, Perm.AI_USE}
     ),
     Role.PLATFORM_SUPPORT: frozenset(
         {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ,

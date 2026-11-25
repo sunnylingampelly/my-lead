@@ -111,6 +111,8 @@ class Proactive(BaseModel):
 class BotCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     template: str | None = Field(None, max_length=40)
+    # The website the chat will appear on. Required: chatbots only run on the owner's listed websites.
+    website: str = Field(..., min_length=3, max_length=255)
 
 
 class BotUpdate(BaseModel):

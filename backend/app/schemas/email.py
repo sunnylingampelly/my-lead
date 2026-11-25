@@ -246,6 +246,8 @@ class ReadinessCheck(BaseModel):
     action_label: str | None = None
     pending: bool = False
     meta: dict[str, Any] | None = None
+    # A failing warning is shown but never blocks launching (e.g. an unauthenticated sender domain).
+    warning: bool = False
 
 
 class MessageOut(ORMModel):

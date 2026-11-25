@@ -238,7 +238,27 @@ def effective_settings() -> dict:
         "pricing": {"email": s.EMAIL_PRICING, "sms": s.SMS_PRICING, "voice": s.VOICE_PRICING, "fx": s.FX_RATES},
         "limits": {"email_per_second": s.EMAIL_RATE_PER_SECOND, "sms_per_second": s.SMS_RATE_PER_SECOND,
                    "calls_per_second": s.VOICE_CALLS_PER_SECOND, "max_concurrent_calls": s.VOICE_MAX_CONCURRENT_CALLS},
+        "backups": backup_status(),
     }
+
+
+def backup_status() -> dict:
+    """The newest database backup (scripts/backup_db.py) by file modification time. The folder path is
+    not returned, only whether one is configured."""
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    folder = Path(settings.BACKUP_DIR) if settings.BACKUP_DIR else \
+        Path(__file__).resolve().parents[2] / "var" / "backups"
+    files = [p for p in folder.glob("*.sql.gz")] if folder.is_dir() else []
+    newest = max(files, key=lambda p: p.stat().st_mtime) if files else None
+    last = datetime.fromtimestamp(newest.stat().st_mtime, tz=UTC) if newest else None
+    age_hours = round((utcnow() - last).total_seconds() / 3600, 1) if last else None
+    return {"configured_dir": bool(settings.BACKUP_DIR), "count": len(files),
+            "last_backup_at": last.isoformat() if last else None,
+            "last_backup_file": newest.name if newest else None,
+            "last_backup_bytes": newest.stat().st_size if newest else None,
+            "age_hours": age_hours, "stale": last is None or age_hours > 26}
 
 
 

@@ -44,4 +44,21 @@ def process_payment_webhook(webhook_event_id: str) -> str:
         w.error = None if ok else result
         w.processed_at = utcnow()
         db.commit()
+        # Tax invoices issued in this transaction are emailed only now that it has committed.
+        from app.workers.dispatch import dispatch
+
+        for invoice_id in db.info.pop("issued_invoices", []):
+            dispatch(send_invoice_email, invoice_id)
         return result
+
+
+@celery_app.task(name="app.tasks.payments.send_invoice_email", autoretry_for=(OperationalError,),
+                 retry_backoff=True, max_retries=5)
+def send_invoice_email(invoice_id: str) -> bool:
+    """Email a tax invoice PDF to the organization's billing email (after the payment committed)."""
+    from app.services.billing import invoices
+
+    with SessionLocal() as db:
+        sent = invoices.send_invoice(db, invoice_id)
+        db.commit()
+        return sent

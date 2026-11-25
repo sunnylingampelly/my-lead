@@ -2,13 +2,15 @@
 opt-out prompt. Built from the snapshot frozen at launch, personalised per contact."""
 from app.core.config import settings
 from app.providers.voice.base import AgentRelay, CallScript, ScriptStep
+from app.services import uae
 from app.services.email import render, tokens
 from app.services.voice import rules
 from app.services.voice.library import audio_url
 
 
 def default_language(country: str | None) -> str:
-    return "en-US" if country == "US" else "en-IN"
+    # UAE: English with the Arabic voice available per agent (ar-AE); en-US is the closest English voice.
+    return {"US": "en-US", "AE": "en-US"}.get(country or "", "en-IN")
 
 
 def snapshot_message(audio, caller, campaign) -> dict:
@@ -42,6 +44,10 @@ def build(snap: dict, contact, call_id: str | None, sample: bool = False) -> Cal
     values = render.contact_values(contact, sample=sample)
     lang, voice = snap.get("language"), snap.get("voice")
     steps = []
+    if snap.get("country") == "AE":
+        # UAE: the recording notice (and who is calling) comes first on every call.
+        steps.append(ScriptStep("say", text=uae.recording_notice_plain(snap.get("business_name")), language=lang,
+                                voice=voice))
     if snap.get("intro_text"):
         steps.append(ScriptStep("say", text=render.substitute(snap["intro_text"], values, escape=False),
                                 language=lang, voice=voice))
@@ -58,12 +64,22 @@ def build(snap: dict, contact, call_id: str | None, sample: bool = False) -> Cal
     return CallScript(steps=tuple(steps), gather_digit_url=gather_url, gather_prompt=prompt)
 
 
+def agent_greeting(snap: dict, values: dict) -> str:
+    """The agent's opening line. UAE: the recording notice and AI disclosure come before anything else."""
+    from app.services.voice import ai
+
+    greeting = ai.greeting_for(snap.get("agent") or {}, values)
+    if snap.get("country") == "AE":
+        greeting = f"{uae.recording_notice(snap.get('business_name') or values.get('business_name'))} {greeting}"
+    return greeting.strip()
+
+
 def build_agent(snap: dict, contact, call_id: str | None, sample: bool = False) -> CallScript:
     from app.services.voice import ai, relay
 
     agent = snap.get("agent") or {}
     values = ai.values_for("Asha" if sample and contact is None else None, snap.get("business_name") or "us", contact)
-    greeting = ai.greeting_for(agent, values)
+    greeting = agent_greeting(snap, values)
     lang, voice = agent.get("language") or snap.get("language"), agent.get("voice") or snap.get("voice")
     rel = AgentRelay(url=relay.ws_url(call_id), greeting=greeting, language=lang, voice=voice,
                      action_url=relay.action_url(call_id)) if call_id else None

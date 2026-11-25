@@ -100,3 +100,11 @@ def process_webhook_event(webhook_event_id: str) -> str:
         w.processed_at = utcnow()
         db.commit()
         return w.status
+
+
+@celery_app.task(name="app.tasks.email.check_sender_domains")
+def check_sender_domains() -> dict:
+    """Daily DNS authentication check (SPF, DKIM, DMARC, MX) of every sender domain."""
+    from app.services.email.domains import refresh_all
+
+    return refresh_all()

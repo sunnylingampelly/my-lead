@@ -139,6 +139,11 @@ def test_razorpay_link_amount_mismatch_and_credit(api_factory, monkeypatch):
         monkeypatch.setattr(settings, k, v)
     monkeypatch.setattr(pp.httpx, "post", lambda url, json=None, auth=None, timeout=None: FakeResp(
         200, {"id": "plink_1", "short_url": "https://rzp.io/i/abc"}))
+    # INR top-ups carry GST: they need the platform's GST registration and the buyer's billing details.
+    monkeypatch.setattr(settings, "SELLER_GSTIN", "29AAPFU0939F1ZR")
+    monkeypatch.setattr(settings, "SELLER_STATE_CODE", "29")
+    a.put(f"{b}/profile", json={"legal_name": "Chai India Pvt Ltd", "address": "1 MG Road", "state_code": "29",
+                                "pin_code": "560001", "email": "accounts@chai.example"})
     r = a.post(f"{b}/checkout", json={"amount": "1000"})
     assert r.status_code == 200 and r.json()["provider"] == "razorpay"
     pid = r.json()["id"]

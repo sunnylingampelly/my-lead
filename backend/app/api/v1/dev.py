@@ -60,6 +60,30 @@ def sms_outbox(to: str | None = Query(None, max_length=20), limit: int = Query(5
     return {"items": items, "simulation": True}
 
 
+@router.get("/slack")
+def slack_log(limit: int = Query(100, ge=1, le=500)):
+    """Messages the simulated Slack connection "posted" (AI agents, approvals, automation steps)."""
+    from app.services.ai_team.slack import sim_messages
+
+    return {"items": sim_messages(limit), "simulation": True}
+
+
+@router.post("/slack/click")
+def slack_click(body: dict):
+    """Press Approve / Reject on a simulated Slack message as the Slack user with this email (development only).
+    Goes through the same interactivity handler as real Slack, minus the signature."""
+    from app.core.database import SessionLocal
+    from app.services.ai_team.slack import SIM_USER_PREFIX, handle_interaction
+
+    action_id = str(body.get("action_id") or "")[:36]
+    email = str(body.get("email") or "").strip()[:320]
+    approve = bool(body.get("approve"))
+    payload = {"type": "block_actions", "team": {"id": "TSIMULATED"}, "user": {"id": SIM_USER_PREFIX + email},
+               "actions": [{"action_id": "ai_approve" if approve else "ai_reject", "value": action_id}]}
+    with SessionLocal() as db:
+        return handle_interaction(db, payload)
+
+
 @router.get("/call-log")
 def call_log(limit: int = Query(50, ge=1, le=200)):
     from app.providers.voice.simulation import call_log_path

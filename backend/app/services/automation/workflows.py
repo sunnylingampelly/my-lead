@@ -5,6 +5,7 @@ from datetime import timedelta
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.permissions import Perm
 from app.models import ContactList, Segment, Tag
@@ -67,6 +68,8 @@ def node_issues(db: Session, ctx, g: Graph) -> list[Issue]:
             kind = d.get("kind")
             if kind not in TRIGGERS:
                 issues.append(Issue(nid, "Choose what starts this workflow"))
+            elif kind == "sms_replied" and not settings.SMS_ENABLED:
+                issues.append(Issue(nid, "SMS is coming soon"))
             elif kind == "added_to_list" and not _owned(db, ContactList, d.get("list_id"), app_id):
                 issues.append(Issue(nid, "Choose a list"))
             elif kind == "tag_added" and not _owned(db, Tag, d.get("tag_id"), app_id):
@@ -97,6 +100,8 @@ def node_issues(db: Session, ctx, g: Graph) -> list[Issue]:
                 issues.append(Issue(nid, "Choose a verified sender"))
             if not _owned(db, EmailTemplate, d.get("template_id"), app_id):
                 issues.append(Issue(nid, "Choose an email template"))
+        elif t == "send_sms" and not settings.SMS_ENABLED:
+            issues.append(Issue(nid, "SMS is coming soon"))
         elif t == "send_sms":
             s = _owned(db, SmsSender, d.get("sender_ref"), app_id)
             if s is None or s.status != "active":
@@ -158,6 +163,12 @@ def node_issues(db: Session, ctx, g: Graph) -> list[Issue]:
             problem = action_issue(db, app_id, ctx.organization_id, d)
             if problem:
                 issues.append(Issue(nid, problem))
+        elif t in ("ai_step", "slack_message"):
+            from app.services.ai_team import workflow_nodes
+
+            problem = (workflow_nodes.ai_step_issue if t == "ai_step" else workflow_nodes.slack_issue)(db, ctx, d)
+            if problem:
+                issues.append(Issue(nid, problem))
     return issues
 
 
@@ -177,7 +188,7 @@ def channel_issues(db: Session, ctx, w: Workflow, g: Graph) -> list[Issue]:
         w.node_campaigns = mapping
         checks, _ = {"send_email": email_ready, "send_sms": sms_ready, "voice_call": voice_ready}[n["type"]](db, ctx, c)
         for ch in checks:
-            if not ch.ok and ch.key not in ("audience", "sender", "caller", "message", "content"):
+            if not ch.ok and not ch.warning and ch.key not in ("audience", "sender", "caller", "message", "content"):
                 issues.append(Issue(nid, f"{ch.label}: {ch.detail}"))
     w.node_campaigns = mapping
     return issues
@@ -255,8 +266,20 @@ def run_counts(db: Session, ids: list[str]) -> dict[str, dict[str, int]]:
     return out
 
 
+def _sms_nodes(graph: dict | None) -> set:
+    return {n.get("id") for n in (graph or {}).get("nodes", []) if n.get("type") == "send_sms"
+            or (n.get("type") == "trigger" and (n.get("data") or {}).get("kind") == "sms_replied")}
+
+
+def _refuse_new_sms_steps(graph: dict | None, before: dict | None) -> None:
+    """SMS is "coming soon" (SMS_ENABLED off): no new SMS step or SMS-reply trigger can be added."""
+    if not settings.SMS_ENABLED and _sms_nodes(graph) - _sms_nodes(before):
+        raise ValidationFailed("SMS is coming soon", code="SMS_COMING_SOON")
+
+
 def create_workflow(db: Session, ctx: AppContext, name: str, description: str | None, graph: dict | None) -> Workflow:
     ctx.require(Perm.AUTOMATION_WRITE)
+    _refuse_new_sms_steps(graph, None)
     w = Workflow(organization_id=ctx.organization_id, application_id=ctx.application_id, name=name.strip(),
                  description=description, status="draft", created_by_id=ctx.user.id, node_campaigns={},
                  published_graph={}, has_unpublished_changes=True,
@@ -277,6 +300,7 @@ def update_workflow(db: Session, ctx: AppContext, workflow_id: str, changes: dic
         g = changes["graph"]
         if len(g.get("nodes", [])) > 100 or len(g.get("edges", [])) > 300:
             raise ValidationFailed("Workflows can have up to 100 steps", code="WORKFLOW_TOO_LARGE")
+        _refuse_new_sms_steps(g, w.graph)
         w.graph = g
         # Only a real difference from what is live counts as an unpublished change.
         w.has_unpublished_changes = w.version == 0 or g != (w.published_graph or {})
@@ -475,6 +499,10 @@ def describe(db: Session, node: dict) -> str:
             "Condition: contact matches rules"
     if t == "split":
         return f"A/B split {d.get('percent_a', 50)}% / {100 - int(d.get('percent_a', 50) or 50)}%"
+    if t == "ai_step":
+        return f"AI step: {d.get('mode') or 'classify'} → {d.get('output_field') or '?'}"
+    if t == "slack_message":
+        return f"Send to Slack: #{d.get('channel_name') or '?'}"
     return STEP_NAMES.get(t, t or "Step")
 
 
