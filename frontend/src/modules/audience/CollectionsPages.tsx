@@ -55,9 +55,6 @@ function UseAudienceMenu({ audience, name, compact }: { audience: { segment_id?:
             <Link to={campaignUrl(appId, 'email', audience)}>Send email campaign</Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link to={campaignUrl(appId, 'sms', audience)}>Send SMS campaign</Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
             <Link to={campaignUrl(appId, 'voice', audience)}>Send voice campaign</Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />

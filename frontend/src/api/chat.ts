@@ -25,7 +25,7 @@ export const chatApi = (appId: string) => {
     templates: () => data(http.get<BotTemplate[]>(`${b}/templates`)),
     bots: () => data(http.get<ChatBot[]>(`${b}/bots`)),
     bot: (id: string) => data(http.get<ChatBot>(`${b}/bots/${id}`)),
-    createBot: (body: { name: string; template?: string | null }) => data(http.post<ChatBot>(`${b}/bots`, body)),
+    createBot: (body: { name: string; template?: string | null; website: string }) => data(http.post<ChatBot>(`${b}/bots`, body)),
     updateBot: (id: string, body: Partial<ChatBot>) => data(http.patch<ChatBot>(`${b}/bots/${id}`, body)),
     deleteBot: (id: string) => data(http.delete(`${b}/bots/${id}`)),
     publish: (id: string) => data(http.post<ChatBot>(`${b}/bots/${id}/publish`)),

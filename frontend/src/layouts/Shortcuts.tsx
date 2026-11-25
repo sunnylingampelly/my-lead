@@ -67,6 +67,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
     title: 'General',
     items: [
       [['Ctrl', 'K'], 'Open command palette'],
+      [['Ctrl', 'J'], 'Open the AI Assistant'],
       [['/'], 'Search on this page'],
       [['?'], 'Show keyboard shortcuts'],
       [['['], 'Collapse or expand sidebar'],

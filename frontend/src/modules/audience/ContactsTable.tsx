@@ -435,9 +435,6 @@ export function ContactsTable({ scope = {}, showFilters = true, emptyAction, ext
                     <Link to={campaignUrl(appId, 'email', { contact_ids: selectedIds })}>Email campaign</Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
-                    <Link to={campaignUrl(appId, 'sms', { contact_ids: selectedIds })}>SMS campaign</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
                     <Link to={campaignUrl(appId, 'voice', { contact_ids: selectedIds })}>Voice campaign</Link>
                   </DropdownMenuItem>
                 </DropdownMenuContent>

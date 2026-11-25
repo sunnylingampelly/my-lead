@@ -33,7 +33,7 @@ test('Lead forms: build from a template, publish, submit on the hosted page, see
   await createOrgAndApp(page, 'Forms Co', 'Forms Desk')
 
   await navTo(page, 'Lead forms')
-  await expect(page.getByRole('heading', { name: 'Lead forms' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Lead forms', exact: true })).toBeVisible()
   await createForm(page, /^Contact us/, 'Website contact')
 
   // The template's fields: first name, last name, email, phone, message, consent.
@@ -104,7 +104,7 @@ test('Lead forms: no horizontal scroll at phone width', async ({ page }) => {
 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${appPath}/forms`)
-  await expect(page.getByRole('heading', { name: 'Lead forms' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Lead forms', exact: true })).toBeVisible()
   await expectNoOverflow(page, 390)
 
   await createForm(page, /^Contact us/, 'Phone form')

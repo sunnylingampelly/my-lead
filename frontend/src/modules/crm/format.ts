@@ -1,5 +1,6 @@
 import { CalendarClock, CheckSquare, Mail, MessageCircle, MessageSquare, Phone, PhoneCall, type LucideIcon, MapPin, MoreHorizontal, Users, StickyNote, Cog, ListTodo } from 'lucide-react'
 import type { ActivityType, Lifecycle, Money, Priority, TaskType } from '@/types/crm'
+import { currencyLocale } from '@/lib/regions'
 import { formatMoney } from '../sms/format'
 
 const num = (v: Money | null | undefined) => (v === null || v === undefined || v === '' ? 0 : Number(v))
@@ -7,7 +8,7 @@ const num = (v: Money | null | undefined) => (v === null || v === undefined || v
 /** Amount in whole units: ₹12,34,567 (Indian grouping) or $1,234,567. `exact` keeps paise/cents. */
 export function money(v: Money | null | undefined, currency: string = 'INR', exact = false) {
   const n = num(v)
-  return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+  return new Intl.NumberFormat(currencyLocale(currency), {
     style: 'currency',
     currency,
     maximumFractionDigits: exact && !Number.isInteger(n) ? 2 : 0,
@@ -26,7 +27,7 @@ export function moneyCompact(v: Money | null | undefined, currency: string = 'IN
     return money(n, 'INR')
   }
   if (abs >= 1e4)
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 }).format(n)
+    return new Intl.NumberFormat(currencyLocale(currency), { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 }).format(n)
   return money(n, currency)
 }
 

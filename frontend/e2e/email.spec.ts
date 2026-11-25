@@ -22,6 +22,15 @@ test('sender, campaign from a starter, send, report, open tracking and unsubscri
   await page.reload()
   await expect(page.getByText('Verified', { exact: true })).toBeVisible()
 
+  // Domain authentication: the card checks SPF / DKIM / DMARC for the sender's domain and can check again.
+  // (chai.example has no DNS records, or DNS checks are off on this server: either way the card renders.)
+  const dnsCard = page.getByTestId('domain-auth-card')
+  await expect(dnsCard).toContainText('Domain authentication')
+  await expect(dnsCard).toContainText('chai.example')
+  await expect(dnsCard.getByTestId('domain-auth-status')).toBeVisible()
+  await dnsCard.getByRole('button', { name: 'Check again' }).click()
+  await expect(dnsCard.getByTestId('domain-auth-status')).toHaveText(/Not authenticated|Partly set up|Could not check|Checks off|Authenticated/)
+
   // Contacts with email consent.
   await navTo(page, 'Import')
   const a = `priya.${tag}@example.in`
@@ -53,7 +62,8 @@ test('sender, campaign from a starter, send, report, open tracking and unsubscri
   await page.getByText('All reachable contacts').click()
   await expect(page.getByTestId('eligible-count')).toHaveText('2')
   await page.getByRole('button', { name: /Next: Review/ }).click()
-  await expect(page.getByTestId('readiness').getByRole('listitem')).toHaveCount(7)
+  // Seven checks, plus a sender-domain warning when DNS checks are on (it never blocks sending).
+  await expect(page.getByTestId('readiness').locator('li:not([data-check="domain_auth"])')).toHaveCount(7)
   await page.getByTestId('launch').click()
   await page.getByRole('alertdialog').getByRole('button', { name: 'Send now' }).click()
 

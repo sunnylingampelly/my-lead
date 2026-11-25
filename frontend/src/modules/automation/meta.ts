@@ -1,4 +1,4 @@
-import { Clock, Flag, GitBranch, Handshake, Mail, MessageSquare, PhoneCall, Split, UserCog, Zap, type LucideIcon } from 'lucide-react'
+import { Clock, Flag, GitBranch, Handshake, Hash, Mail, MessageSquare, PhoneCall, Sparkles, Split, UserCog, Zap, type LucideIcon } from 'lucide-react'
 import type { FlowEdge, FlowNode, NodeType, WorkflowGraph } from '@/api/automation'
 
 export interface NodeMeta {
@@ -7,7 +7,7 @@ export interface NodeMeta {
   icon: LucideIcon
   /** Tailwind classes for the node's icon chip. */
   tone: string
-  group: 'Trigger' | 'Messages' | 'Flow' | 'Contact' | 'CRM'
+  group: 'Trigger' | 'Messages' | 'Flow' | 'Contact' | 'CRM' | 'AI'
   outputs: (string | null)[]
 }
 
@@ -21,8 +21,14 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
   split: { label: 'A/B split', description: 'Random split by percentage', icon: Split, tone: 'bg-pink-100 text-pink-700 dark:bg-pink-500/15 dark:text-pink-300', group: 'Flow', outputs: ['a', 'b'] },
   update_contact: { label: 'Update contact', description: 'Tags and lists', icon: UserCog, tone: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300', group: 'Contact', outputs: [null] },
   crm_action: { label: 'CRM action', description: 'Deals, tasks, owner, lifecycle', icon: Handshake, tone: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300', group: 'CRM', outputs: [null] },
+  ai_step: { label: 'AI step', description: 'Classify, extract or write with AI', icon: Sparkles, tone: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-500/15 dark:text-fuchsia-300', group: 'AI', outputs: [null] },
+  slack_message: { label: 'Send to Slack', description: 'Post to a Slack channel', icon: Hash, tone: 'bg-purple-100 text-purple-800 dark:bg-purple-500/15 dark:text-purple-300', group: 'AI', outputs: [null] },
   end: { label: 'End', description: 'Finish the journey', icon: Flag, tone: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-500/20 dark:text-zinc-300', group: 'Flow', outputs: [] },
 }
+
+/** SMS is coming soon in every market: these steps and triggers are shown but can't be added. */
+export const COMING_SOON_STEPS: NodeType[] = ['send_sms']
+export const COMING_SOON_TRIGGERS = ['sms_replied']
 
 export const TRIGGER_LABEL: Record<string, string> = {
   contact_created: 'Contact is created',
@@ -30,7 +36,7 @@ export const TRIGGER_LABEL: Record<string, string> = {
   tag_added: 'Tag is added',
   segment_entered: 'Enters a segment',
   form_submitted: 'Form is submitted',
-  sms_replied: 'SMS reply received',
+  sms_replied: 'SMS reply received (coming soon)',
   email_clicked: 'Email link clicked',
   call_answered: 'Call answered',
   unsubscribed: 'Unsubscribed or opted out',
@@ -73,6 +79,8 @@ export const DEFAULT_DATA: Record<NodeType, Record<string, unknown>> = {
   split: { percent_a: 50 },
   update_contact: { action: 'add_tag' },
   crm_action: { action: 'create_task', title: 'Follow up with {{name}}', task_type: 'follow_up', priority: 'normal', due_in_hours: 24 },
+  ai_step: { mode: 'classify', prompt: '', categories: ['pricing', 'support', 'other'], output_field: '' },
+  slack_message: { message: 'New lead: {{contact.first_name}} {{contact.last_name}} ({{contact.email}})' },
   end: {},
 }
 
@@ -101,7 +109,7 @@ export const STARTERS: Starter[] = [
   {
     key: 'welcome',
     name: 'Welcome series',
-    description: 'When a contact is created: welcome email, wait two days, then a text to anyone who didn’t open it.',
+    description: 'When a contact is created: welcome email, wait two days, then a follow-up email to anyone who didn’t open it.',
     graph: {
       nodes: [
         n('trigger', 'trigger', 0, 0, { kind: 'contact_created' }),
@@ -109,9 +117,9 @@ export const STARTERS: Starter[] = [
         n('wait', 'wait', 0, 280, { amount: 2, unit: 'days' }),
         n('opened', 'condition', 0, 420, { kind: 'engagement', node_id: 'email', event: 'opened' }),
         n('tag', 'update_contact', -180, 580, { action: 'add_tag', label: 'Tag as engaged' }),
-        n('sms', 'send_sms', 180, 580, { label: 'Nudge by SMS' }),
+        n('nudge', 'send_email', 180, 580, { label: 'Follow-up email' }),
       ],
-      edges: [e('trigger', 'email'), e('email', 'wait'), e('wait', 'opened'), e('opened', 'tag', 'yes'), e('opened', 'sms', 'no')],
+      edges: [e('trigger', 'email'), e('email', 'wait'), e('wait', 'opened'), e('opened', 'tag', 'yes'), e('opened', 'nudge', 'no')],
     },
   },
   {
@@ -133,15 +141,15 @@ export const STARTERS: Starter[] = [
   {
     key: 'ab',
     name: 'A/B test a message',
-    description: 'Split new segment members between an email and an SMS and compare results.',
+    description: 'Split new segment members between two emails and compare results.',
     graph: {
       nodes: [
         n('trigger', 'trigger', 0, 0, { kind: 'segment_entered' }),
         n('split', 'split', 0, 140, { percent_a: 50 }),
-        n('email', 'send_email', -180, 300, { label: 'Version A: email' }),
-        n('sms', 'send_sms', 180, 300, { label: 'Version B: SMS' }),
+        n('email', 'send_email', -180, 300, { label: 'Version A' }),
+        n('email_b', 'send_email', 180, 300, { label: 'Version B' }),
       ],
-      edges: [e('trigger', 'split'), e('split', 'email', 'a'), e('split', 'sms', 'b')],
+      edges: [e('trigger', 'split'), e('split', 'email', 'a'), e('split', 'email_b', 'b')],
     },
   },
   {

@@ -41,11 +41,11 @@ import { EnrollDialog, SettingsDialog, TestDialog } from './BuilderDialogs'
 import { BuilderContext, type BuilderView } from './context'
 import { FlowNodeCard } from './FlowNodeCard'
 import { Inspector } from './Inspector'
-import { CRM_ACTION_LABEL, DEFAULT_DATA, NODE_META, newId, TRIGGER_LABEL } from './meta'
+import { COMING_SOON_STEPS, CRM_ACTION_LABEL, DEFAULT_DATA, NODE_META, newId, TRIGGER_LABEL } from './meta'
 import { RunsPanel, WorkflowStatusBadge } from './RunsPanel'
 
 const nodeTypes = Object.fromEntries(Object.keys(NODE_META).map((k) => [k, FlowNodeCard]))
-const PALETTE: NodeType[] = ['send_email', 'send_sms', 'voice_call', 'wait', 'condition', 'split', 'update_contact', 'crm_action', 'end']
+const PALETTE: NodeType[] = ['send_email', 'send_sms', 'voice_call', 'wait', 'condition', 'split', 'update_contact', 'crm_action', 'ai_step', 'slack_message', 'end']
 const UNTITLED = 'Untitled workflow'
 const HISTORY = 30
 
@@ -130,6 +130,12 @@ function useSummaries(appId: string) {
                     : ''
           return `${CRM_ACTION_LABEL[a] ?? 'CRM action'}${detail ? `: ${detail}` : ''}`
         }
+        case 'ai_step': {
+          const mode = (d.mode as string) || 'classify'
+          return `${mode[0]!.toUpperCase()}${mode.slice(1)}${d.output_field ? ` → ${d.output_field as string}` : ': choose a field'}`
+        }
+        case 'slack_message':
+          return d.channel_name ? `#${d.channel_name as string}` : 'Choose a channel'
         default:
           return 'Journey ends'
       }
@@ -141,13 +147,28 @@ function useSummaries(appId: string) {
 function Palette({ disabled, onAdd, onPicked }: { disabled: boolean; onAdd: (t: NodeType) => void; onPicked?: () => void }) {
   return (
     <>
-      {(['Messages', 'Flow', 'Contact', 'CRM'] as const).map((group) => (
+      {(['Messages', 'Flow', 'Contact', 'CRM', 'AI'] as const).map((group) => (
         <div key={group}>
           <div className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{group}</div>
           <div className="space-y-1">
             {PALETTE.filter((t) => NODE_META[t].group === group).map((t) => {
               const m = NODE_META[t]
               const Icon = m.icon
+              // SMS is coming soon in every market: shown, but it can't be added.
+              const soon = COMING_SOON_STEPS.includes(t)
+              if (soon)
+                return (
+                  <div key={t} className="flex w-full cursor-not-allowed items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-2 py-1.5 text-left text-sm opacity-70" aria-disabled="true" data-testid={`step-soon-${t}`}>
+                    <span className={cn('flex size-6 items-center justify-center rounded-md', m.tone)}>
+                      <Icon className="size-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-medium">{m.label}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">{m.description}</span>
+                    </span>
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">Coming soon</Badge>
+                  </div>
+                )
               return (
                 <button
                   key={t}
@@ -381,7 +402,7 @@ function Builder() {
   const onDrop = (e: DragEvent) => {
     e.preventDefault()
     const type = e.dataTransfer.getData('application/x-step') as NodeType
-    if (type) add(type, screenToFlowPosition({ x: e.clientX, y: e.clientY }))
+    if (type && !COMING_SOON_STEPS.includes(type)) add(type, screenToFlowPosition({ x: e.clientX, y: e.clientY }))
   }
 
   const sel = nodes.find((n) => n.id === selected)

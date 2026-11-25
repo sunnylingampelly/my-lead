@@ -8,7 +8,10 @@ import { ApiError } from '@/api/client'
 import { AuthProvider } from '@/hooks/useAuth'
 import { ThemeProvider, useTheme } from '@/hooks/useTheme'
 import { router } from '@/routes/router'
+import { initErrorTracking } from '@/lib/errorTracking'
 import './index.css'
+
+initErrorTracking()
 
 const queryClient = new QueryClient({
   defaultOptions: {

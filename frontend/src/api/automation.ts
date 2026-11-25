@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { http } from './client'
 import type { Page } from '@/types/api'
 
-export type NodeType = 'trigger' | 'send_email' | 'send_sms' | 'voice_call' | 'wait' | 'condition' | 'split' | 'update_contact' | 'crm_action' | 'end'
+export type NodeType = 'trigger' | 'send_email' | 'send_sms' | 'voice_call' | 'wait' | 'condition' | 'split' | 'update_contact' | 'crm_action' | 'ai_step' | 'slack_message' | 'end'
 
 export interface FlowNode {
   id: string

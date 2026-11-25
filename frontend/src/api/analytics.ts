@@ -48,6 +48,8 @@ export interface AnalyticsOverview {
   /** % change against the previous period of the same length (null when there was nothing before). */
   changes: Record<string, number | null>
   rates: Record<string, number | null>
+  /** Rates of the previous period (form conversion, bot-resolved %, chat lead rate). */
+  previous_rates?: Record<string, number | null>
   top_campaigns: TopCampaign[]
   workflows: { id: string; name: string; status: string; entered: number; completed: number }[]
   /** Null when the viewer can't read the CRM. */

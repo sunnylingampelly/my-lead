@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/misc'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { applyServerErrors } from '@/lib/forms'
 import { formatDate } from '@/lib/utils'
+import { DataRequestsCard, OrgSecurityCard } from './OrgPrivacyCards'
 
 const schema = z.object({
   name: z.string().trim().min(2, 'At least 2 characters').max(120),
@@ -123,6 +124,16 @@ export function OrgSettingsPage() {
             </dl>
           </CardContent>
         </Card>
+        {(org.role === 'owner' || org.role === 'admin') && (
+          <div className="lg:col-span-2">
+            <OrgSecurityCard org={org} editable={editable} />
+          </div>
+        )}
+        {canOrg('privacy.manage') && (
+          <div className="lg:col-span-2">
+            <DataRequestsCard orgId={org.id} />
+          </div>
+        )}
       </div>
     </>
   )

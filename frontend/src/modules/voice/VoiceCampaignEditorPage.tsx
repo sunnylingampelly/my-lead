@@ -141,7 +141,7 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
   const [tts, setTts] = useState<ReturnType<typeof blankTts> | null>(null)
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const defaultLang: VoiceLanguage = market === 'US' ? 'en-US' : 'en-IN'
+  const defaultLang: VoiceLanguage = market === 'US' || app!.default_country === 'AE' ? 'en-US' : 'en-IN'
   const agents = useAgents(app!.id)
   const audioKind = audio.data?.find((a) => a.id === draft.audio_id)?.kind
   const type = draft.message_type ?? (audioKind === 'tts' ? 'tts' : audioKind ? 'audio' : null)

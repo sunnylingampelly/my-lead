@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Briefcase, CheckSquare, ListPlus, Mail, MessageSquare, Phone, PhoneCall, Plus, Tag, Workflow } from 'lucide-react'
+import { Briefcase, CheckSquare, ListPlus, Mail, Phone, PhoneCall, Plus, Tag, Workflow } from 'lucide-react'
 import { aqk, audienceApi, useLists, useTags } from '@/api/audience'
 import { http, errorMessage } from '@/api/client'
 import { automationApi } from '@/api/automation'
@@ -69,7 +69,6 @@ export interface QuickContact {
 
 const SEND: { ch: CampaignChannel; label: string; icon: typeof Mail; needs: 'email' | 'phone' }[] = [
   { ch: 'email', label: 'Send email', icon: Mail, needs: 'email' },
-  { ch: 'sms', label: 'Send SMS', icon: MessageSquare, needs: 'phone' },
   { ch: 'voice', label: 'Call', icon: Phone, needs: 'phone' },
 ]
 

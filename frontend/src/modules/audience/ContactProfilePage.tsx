@@ -22,6 +22,7 @@ import { ContactCrmPanel } from '../crm/ContactCrmPanel'
 import { AddTagDialog, AddToListDialog, QuickActions, ReachChips, reachFromEligibility, WorkflowsCard } from '../crm/connect'
 import { KIND_META } from '../crm/format'
 import { ContactFormDialog } from './ContactFormDialog'
+import { ContactPrivacyActions } from './ContactPrivacyActions'
 
 /** Email, SMS and call history from campaigns (and SMS replies), newest first. */
 function CampaignHistory({ appId, contactId }: { appId: string; contactId: string }) {
@@ -210,14 +211,19 @@ export function ContactProfilePage() {
           </span>
         }
         actions={
-          write && (
+          (write || can('privacy.manage')) && (
             <>
-              <Button variant="outline" onClick={() => setEdit(true)}>
-                <Pencil /> Edit
-              </Button>
-              <Button variant="outline" className="text-destructive" onClick={() => setDel(true)}>
-                <Trash2 /> Delete
-              </Button>
+              {write && (
+                <>
+                  <Button variant="outline" onClick={() => setEdit(true)}>
+                    <Pencil /> Edit
+                  </Button>
+                  <Button variant="outline" className="text-destructive" onClick={() => setDel(true)}>
+                    <Trash2 /> Delete
+                  </Button>
+                </>
+              )}
+              {can('privacy.manage') && <ContactPrivacyActions appId={appId} contactId={c.id} name={name} />}
             </>
           )
         }
@@ -320,6 +326,37 @@ export function ContactProfilePage() {
                   <p className="flex items-start gap-2 text-xs text-muted-foreground sm:col-span-3">
                     <ShieldAlert className="mt-0.5 size-3.5 shrink-0" /> Promotional SMS needs a DLT-registered header and template, and is sent 9:00–21:00 IST.
                   </p>
+                )}
+                {(c.jurisdiction === 'AE' || c.dncr_registered) && (
+                  <div className="flex flex-col gap-2 text-xs text-muted-foreground sm:col-span-3 sm:flex-row sm:items-center" data-testid="dncr">
+                    <p className="flex flex-1 items-start gap-2">
+                      <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                      {c.dncr_registered
+                        ? 'On the UAE Do Not Call Registry (DNCR): this number is never called.'
+                        : 'UAE calls: 09:00–18:00 UAE time, Monday to Friday. Numbers on the Do Not Call Registry (DNCR) are never called.'}
+                    </p>
+                    {write && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        loading={busy}
+                        onClick={async () => {
+                          setBusy(true)
+                          try {
+                            await api.updateContact(c.id, { dncr_registered: !c.dncr_registered })
+                            await refresh()
+                            toast.success(c.dncr_registered ? 'DNCR flag removed' : 'Marked as on the DNCR')
+                          } catch (e) {
+                            toast.error(errorMessage(e))
+                          } finally {
+                            setBusy(false)
+                          }
+                        }}
+                      >
+                        {c.dncr_registered ? 'Remove DNCR flag' : 'Mark as on the DNCR'}
+                      </Button>
+                    )}
+                  </div>
                 )}
               </CardContent>
             </Card>

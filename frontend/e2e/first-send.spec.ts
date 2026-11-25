@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { createOrgAndApp, linkFromMailbox, registerAndVerify, uniqueEmail } from './helpers'
 
 /**
- * A brand-new user sends their first email, SMS and voice campaign using only the guidance inside the
+ * A brand-new user sends their first email and voice campaign (SMS is coming soon) using only the guidance inside the
  * editors: inline sender / caller / template dialogs, self-describing readiness fixes, "Back to campaign"
  * after registration, and no horizontal scrolling at phone width.
  */
@@ -28,7 +28,7 @@ async function atPhoneWidth(page: Page, label: string, check?: () => Promise<voi
   await page.setViewportSize(size)
 }
 
-test('India: first email, SMS and voice campaign from inside the editors', async ({ page, browser }) => {
+test('India: first email and voice campaign from inside the editors', async ({ page, browser }) => {
   test.setTimeout(240_000)
   page.on('pageerror', (e) => console.log('PAGEERROR', e.message, (e.stack ?? '').slice(0, 400)))
   const tag = String(Date.now()).slice(-5)
@@ -103,60 +103,19 @@ test('India: first email, SMS and voice campaign from inside the editors', async
     .poll(async () => (await (await page.request.get(`/api/v1/dev/mailbox?to=${encodeURIComponent(email)}`)).json()).items.length, { timeout: 20_000 })
     .toBeGreaterThan(0)
 
-  // ---------------------------------------------------------------- SMS
+  // ---------------------------------------------------------------- SMS (coming soon everywhere)
   await page.goto(`${base}/sms/campaigns/new`)
-  await expect(page.getByLabel('Campaign name')).toBeVisible()
-  await page.getByRole('button', { name: 'Step 4: Review & send' }).click()
-  // Before any sender is chosen every Indian requirement is listed, priced in rupees.
-  const checks = page.getByTestId('readiness')
-  for (const key of ['sender', 'registration', 'category', 'dlt_template', 'consent']) await expect(checks.locator(`[data-check="${key}"]`)).toBeVisible()
-  await expect(checks.locator('[data-check="category"]')).toContainText('Needed')
-  await checks.getByTestId('what-pe_id').click()
-  await expect(checks.getByRole('note')).toContainText('Principal Entity')
-  await atPhoneWidth(page, 'sms review (no sender)')
-  // Registration opens with "Back to campaign".
-  await checks.getByTestId('action-registration').click()
-  await expect(page.getByTestId('return-banner')).toBeVisible()
+  await expect(page.getByTestId('sms-coming-soon')).toBeVisible()
+  await expect(page.getByLabel('Campaign name')).toHaveCount(0)
+  await atPhoneWidth(page, 'sms coming soon')
+
+  // ---------------------------------------------------------------- voice
+  // Indian calls need the TRAI DLT entity registration (Voice → Registration; SMS is coming soon).
+  await page.goto(`${base}/voice/registration`)
   await page.getByLabel('Principal Entity ID').fill('1101456789012345678')
   await page.getByRole('checkbox', { name: 'Confirm registration' }).check()
   await page.getByRole('button', { name: 'Save registration' }).click()
   await expect(page.getByTestId('registration-confirmed')).toBeVisible()
-  await page.getByTestId('return-banner').getByRole('link', { name: 'Back to campaign' }).click()
-  await expect(checks.locator('[data-check="registration"]')).toHaveAttribute('data-ok', 'true')
-  // Sender ID and DLT template, inline.
-  await checks.getByTestId('fix-sender').click()
-  await page.getByTestId('add-sender-inline').first().click()
-  await page.getByLabel('Header', { exact: true }).fill('561234')
-  await page.getByRole('dialog').getByRole('button', { name: 'Add sender ID' }).click()
-  await page.getByTestId('confirm-sender-inline').click()
-  await page.getByRole('alertdialog').getByRole('button', { name: 'I confirm' }).click()
-  await expect(page.getByText('Approved')).toBeVisible()
-  await page.getByTestId('add-template-inline').click()
-  const dlg = page.getByRole('dialog')
-  await dlg.getByLabel('Name').fill('Welcome')
-  await dlg.getByLabel('Message', { exact: true }).fill('Hi {{first_name}}, welcome to First Chai. Show this text for a free cup!')
-  await dlg.getByLabel('DLT template ID').fill('1107160000000054321')
-  await dlg.getByLabel('Registered text').fill('Hi {#var#}, welcome to First Chai. Show this text for a free cup!')
-  await dlg.getByRole('button', { name: 'Create template' }).click()
-  await expect(page.getByLabel('DLT content template')).not.toHaveValue('')
-  await page.getByRole('button', { name: /Next: Message/ }).click()
-  await expect(page.getByTestId('dlt-match')).toContainText('Matches the registered DLT template')
-  await page.getByRole('button', { name: /Next: Audience/ }).click()
-  await page.getByText('All reachable contacts').click()
-  await expect(page.getByTestId('eligible-count')).toHaveText('1')
-  await page.getByRole('button', { name: /Next: Review/ }).click()
-  await expect(page.getByTestId('cost-estimate')).toContainText('₹')
-  await atPhoneWidth(page, 'sms review (ready)')
-  await expect(page.getByTestId('launch')).toBeEnabled()
-  await page.getByTestId('launch').click()
-  await page.getByRole('alertdialog').getByRole('button', { name: 'Send now' }).click()
-  await expect(page.getByText('Simulation mode.')).toBeVisible()
-  await atPhoneWidth(page, 'sms report')
-  await expect
-    .poll(async () => JSON.stringify(await (await page.request.get('/api/v1/dev/sms-outbox?limit=200')).json()).includes(phone.slice(-5)), { timeout: 20_000 })
-    .toBe(true)
-
-  // ---------------------------------------------------------------- voice
   await page.goto(`${base}/voice/campaigns/new`)
   await expect(page.getByLabel('Campaign name')).toBeVisible()
   await page.getByRole('radio', { name: 'Transactional', exact: true }).click()
@@ -189,14 +148,14 @@ test('India: first email, SMS and voice campaign from inside the editors', async
     .toBe(true)
 
   // Overview and list pages at phone width.
-  for (const path of ['/email', '/email/campaigns', '/sms', '/sms/campaigns', '/sms/inbox', '/sms/senders', '/sms/templates', '/voice', '/voice/campaigns', '/voice/agents']) {
+  for (const path of ['/email', '/email/campaigns', '/sms', '/voice', '/voice/campaigns', '/voice/agents']) {
     await page.goto(base + path)
     await page.waitForLoadState('networkidle')
     await atPhoneWidth(page, path)
   }
 })
 
-test('US app: requirements and pricing before a sender is chosen; C3 preselects contacts', async ({ page }) => {
+test('US app: C3 preselects contacts; SMS is coming soon', async ({ page }) => {
   await registerAndVerify(page, 'Ula First', uniqueEmail('first-us'))
   await createOrgAndApp(page, 'First Coffee', 'First Coffee App', 'US')
   const appId = page.url().match(/\/apps\/([^/?]+)/)![1]
@@ -209,16 +168,11 @@ test('US app: requirements and pricing before a sender is chosen; C3 preselects 
   // The manual refresh above rotated the session; let the app finish re-authenticating its own
   // in-flight requests before navigating, or the navigation aborts the app's refresh mid-rotation.
   await page.waitForLoadState('networkidle')
-  await page.goto(`/apps/${appId}/sms/campaigns/new?contact_ids=${contactId}`)
+  await page.goto(`/apps/${appId}/voice/campaigns/new?contact_ids=${contactId}`)
   await expect(page.getByLabel('Campaign name')).toBeVisible()
   await page.getByRole('button', { name: 'Step 3: Audience' }).click()
   await expect(page.getByTestId('picked-contacts')).toContainText('1')
-  await page.getByRole('button', { name: 'Step 4: Review & send' }).click()
-  const checks = page.getByTestId('readiness')
-  await expect(checks.locator('[data-check="registration"]')).toContainText('10DLC')
-  await expect(checks.locator('[data-check="consent"]')).toContainText('TCPA')
-  await expect(checks.locator('[data-check="dlt_template"]')).toHaveCount(0)
+  // SMS is coming soon: the SMS pages show one coming-soon page with no actions.
   await page.goto(`/apps/${appId}/sms`)
-  await expect(page.getByTestId('sms-setup')).toContainText('10DLC')
-  await expect(page.getByTestId('sms-setup')).not.toContainText('DLT entity')
+  await expect(page.getByTestId('sms-coming-soon')).toBeVisible()
 })

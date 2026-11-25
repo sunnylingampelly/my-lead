@@ -47,6 +47,7 @@ export interface ContactDetail extends ContactListItem {
   email_unsubscribed_at: string | null
   sms_unsubscribed_at: string | null
   voice_unsubscribed_at: string | null
+  dncr_registered?: boolean
   jurisdiction: string | null
   jurisdiction_name: string
   eligibility: Record<Channel, { eligible: boolean; reasons: string[] }>
@@ -97,6 +98,8 @@ export interface ContactInput {
   owner_id?: string | null
   lifecycle_stage?: string | null
   clear_owner?: boolean
+  /** The number is on the UAE Do Not Call Registry: never called. */
+  dncr_registered?: boolean
 }
 
 export interface Attribute {
@@ -286,5 +289,7 @@ export interface Compliance {
   email_requires_postal_address: boolean
   regulations: { name: string; summary: string }[]
   checks: { key: string; label: string; required: boolean; done: boolean; pending_module?: string }[]
+  /** Market notices, e.g. UAE SMS and calls "coming soon". */
+  notices?: { key: string; level: string; text: string }[]
   disclaimer: string
 }

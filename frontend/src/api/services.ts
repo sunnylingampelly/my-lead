@@ -8,6 +8,10 @@ import type {
   AuthResponse,
   ChecklistItem,
   DashboardData,
+  DataRequest,
+  MfaChallenge,
+  MfaSetup,
+  MfaStatus,
   ProvidersStatus,
   Invitation,
   InvitationPreview,
@@ -26,7 +30,9 @@ const data = <T>(p: Promise<{ data: T }>) => p.then((r) => r.data)
 export const authApi = {
   register: (body: { email: string; password: string; full_name: string; invitation_token?: string }) =>
     data(http.post<AuthResponse>('/auth/register', body)),
-  login: (body: { email: string; password: string }) => data(http.post<AuthResponse>('/auth/login', body)),
+  login: (body: { email: string; password: string }) =>
+    data(http.post<AuthResponse | MfaChallenge>('/auth/login', body)),
+  loginMfa: (body: { mfa_token: string; code: string }) => data(http.post<AuthResponse>('/auth/login/mfa', body)),
   logout: () => data(http.post('/auth/logout')),
   verifyEmail: (token: string) => data(http.post<User>('/auth/verify-email', { token })),
   resendVerification: () => data(http.post<{ message: string }>('/auth/resend-verification')),
@@ -44,6 +50,22 @@ export const userApi = {
     data(http.put<User>('/users/me/context', body)),
   sessions: () => data(http.get<SessionInfo[]>('/users/me/sessions')),
   revokeSession: (id: string) => data(http.delete(`/users/me/sessions/${id}`)),
+  mfaStatus: () => data(http.get<MfaStatus>('/users/me/mfa')),
+  mfaSetup: () => data(http.post<MfaSetup>('/users/me/mfa/setup')),
+  mfaEnable: (code: string) => data(http.post<{ recovery_codes: string[] }>('/users/me/mfa/enable', { code })),
+  mfaRegenerateCodes: (password: string) =>
+    data(http.post<{ recovery_codes: string[] }>('/users/me/mfa/recovery-codes', { password })),
+  mfaDisable: (body: { password: string; code: string }) =>
+    data(http.post<{ message: string }>('/users/me/mfa/disable', body)),
+}
+
+export const privacyApi = {
+  exportUrl: (appId: string, contactId: string) => `/apps/${appId}/contacts/${contactId}/data-export`,
+  eraseContact: (appId: string, contactId: string, confirm: string) =>
+    data(http.post<{ contact_id: string; already_erased: boolean; details: Record<string, number> }>(
+      `/apps/${appId}/contacts/${contactId}/erase`, { confirm })),
+  requests: (orgId: string, params: { page?: number; page_size?: number; kind?: 'export' | 'erasure' }) =>
+    data(http.get<Page<DataRequest>>(`/organizations/${orgId}/data-requests`, { params })),
 }
 
 export interface OrgInput {
@@ -51,6 +73,7 @@ export interface OrgInput {
   industry?: string | null
   website?: string | null
   country?: string | null
+  require_mfa_admins?: boolean
 }
 
 export const orgApi = {

@@ -51,10 +51,15 @@ export function ComplianceTab() {
               <Scale className="size-4 text-primary" /> <CountryFlag code={c.region === 'XX' ? null : c.region} /> {c.region === 'XX' ? 'No regional profile' : `${c.region_name} rules`}
             </CardTitle>
             <CardDescription>
-              Based on this application's default country. {c.region === 'XX' && 'Set India or the United States as the default country to apply a market profile.'}
+              Based on this application's default country. {c.region === 'XX' && 'Set India, the UAE or the United States as the default country to apply a market profile.'}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {c.notices?.map((n) => (
+              <p key={n.key} className="rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-sm text-warning-strong" data-testid={`notice-${n.key}`}>
+                {n.text}
+              </p>
+            ))}
             {c.regulations.map((r) => (
               <div key={r.name}>
                 <div className="text-sm font-semibold">{r.name}</div>
@@ -63,7 +68,10 @@ export function ComplianceTab() {
             ))}
             <div className="flex flex-wrap gap-2 pt-1">
               <Badge variant="secondary">
-                <Clock className="size-3" /> Promotional window {c.marketing_window[0]}–{c.marketing_window[1]} recipient time
+                <Clock className="size-3" />{' '}
+                {c.region === 'AE'
+                  ? `Calls ${c.marketing_window[0]}–${c.marketing_window[1]} UAE time, Monday to Friday; promotional SMS 07:00–21:00`
+                  : `Promotional window ${c.marketing_window[0]}–${c.marketing_window[1]} recipient time`}
               </Badge>
               <Badge variant="secondary">Currency {c.currency}</Badge>
               {c.sms_voice_requires_written_consent && <Badge variant="warning">Written consent for SMS and calls</Badge>}
@@ -104,7 +112,7 @@ export function ComplianceTab() {
                 <Field
                   label="Postal address"
                   htmlFor="biz-address"
-                  hint={c.region === 'IN' ? 'Registered office address, including PIN code.' : 'Street address or registered P.O. box, city, state and ZIP.'}
+                  hint={c.region === 'IN' ? 'Registered office address, including PIN code.' : c.region === 'AE' ? 'Registered office address, P.O. box and emirate.' : 'Street address or registered P.O. box, city, state and ZIP.'}
                 >
                   <Textarea id="biz-address" rows={3} value={address} onChange={(e) => setAddress(e.target.value)} />
                 </Field>

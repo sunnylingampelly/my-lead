@@ -34,6 +34,7 @@ import { Pagination, StatCard } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
+import { UaeVoiceComingSoon } from './UaeComingSoon'
 import type { VoiceAudio, VoiceCampaignListItem, VoiceLanguage } from '@/types/voice'
 import { CampaignStatusBadge, pct } from '../email/components'
 import { formatMoney } from '../sms/format'
@@ -63,13 +64,19 @@ export function VoiceOverviewPage() {
   const spend = q.data ? Object.entries(q.data.last_30_days.spend) : []
   return (
     <>
-      <PageHeader breadcrumbs={useCrumbs('Overview')} title="Voice" description="Automated calls over the last 30 days, from provider call records." actions={can('campaigns.write') && <NewVoiceCampaignButton />} />
-      {q.data && (
+      <PageHeader
+        breadcrumbs={useCrumbs('Overview')}
+        title="Voice"
+        description="Automated calls over the last 30 days, from provider call records."
+        actions={can('campaigns.write') && !q.data?.setup.coming_soon && <NewVoiceCampaignButton />}
+      />
+      {q.data?.setup.coming_soon && <UaeVoiceComingSoon appId={app!.id} reason={q.data.setup.coming_soon} rules={q.data.setup.market_rules ?? []} />}
+      {q.data && !q.data.setup.coming_soon && (
         <SetupChecklist
           testId="voice-setup"
           title="Finish voice setup before your first campaign"
           items={[
-            ...(q.data.setup.default_country !== 'US'
+            ...(q.data.setup.default_country === 'IN' || !q.data.setup.default_country
               ? [{ key: 'dlt', label: 'DLT registration (shared by SMS and voice)', done: q.data.setup.dlt_registered, to: `${base}/registration`, term: 'pe_id' }]
               : []),
             {
@@ -201,6 +208,8 @@ const TABS = [
 export function VoiceCampaignsPage() {
   const { app, can } = useWorkspace()
   const appId = app!.id
+  // UAE apps while UAE calling is off: "coming soon" instead of a "New campaign" action.
+  const uaeSoon = useVoiceOverview(appId).data?.setup.coming_soon
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [status, setStatus] = useState('')
@@ -221,7 +230,12 @@ export function VoiceCampaignsPage() {
   const open = (c: VoiceCampaignListItem) => navigate(c.status === 'draft' ? `${base}/${c.id}/edit` : `${base}/${c.id}`)
   return (
     <>
-      <PageHeader breadcrumbs={useCrumbs('Campaigns')} title="Voice campaigns" description="Drafts, scheduled calling and results." actions={can('campaigns.write') && <NewVoiceCampaignButton />} />
+      <PageHeader breadcrumbs={useCrumbs('Campaigns')} title="Voice campaigns" description="Drafts, scheduled calling and results." actions={can('campaigns.write') && !uaeSoon && <NewVoiceCampaignButton />} />
+      {uaeSoon && (
+        <p className="mb-4 rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm text-warning-strong" data-testid="voice-uae-banner">
+          <strong>Coming soon for the UAE.</strong> {uaeSoon}
+        </p>
+      )}
       <Card>
         <div className="flex flex-wrap items-center gap-2 border-b p-3">
           <div className="flex gap-1">
@@ -352,7 +366,7 @@ export function VoiceAudioPage() {
   const [del, setDel] = useState<VoiceAudio | null>(null)
   const [busy, setBusy] = useState(false)
   const write = can('campaigns.write')
-  const lang: VoiceLanguage = app!.default_country === 'US' ? 'en-US' : 'en-IN'
+  const lang: VoiceLanguage = app!.default_country === 'US' || app!.default_country === 'AE' ? 'en-US' : 'en-IN'
   const refresh = () => qc.invalidateQueries({ queryKey: vqk.all(app!.id) })
   return (
     <>

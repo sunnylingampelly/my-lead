@@ -3,7 +3,7 @@ import { http } from './client'
 import type { Page } from '@/types/api'
 
 export interface BillingSummary {
-  currency: 'INR' | 'USD'
+  currency: 'INR' | 'AED' | 'USD'
   balance: number
   held: number
   available: number
@@ -45,7 +45,7 @@ export interface PlanOverview {
   plan: PlanKey
   name: string
   status: 'active' | 'past_due'
-  currency: 'INR' | 'USD'
+  currency: 'INR' | 'AED' | 'USD'
   current_period_start: string | null
   current_period_end: string | null
   scheduled_plan: PlanKey | null
@@ -91,8 +91,78 @@ export interface Analytics {
   points: AnalyticsPoint[]
   totals: Record<string, number>
   rates: Record<string, number | null>
+  previous_rates?: Record<string, number | null>
   top_campaigns: { channel: 'email' | 'sms' | 'voice'; id: string; name: string; automation: boolean; sent: number; engaged: number; engaged_label: string; rate: number | null }[]
   workflows: { id: string; name: string; status: string; entered: number; completed: number }[]
+}
+
+export interface BillingProfile {
+  legal_name: string
+  gstin: string | null
+  address: string
+  city: string | null
+  state_code: string | null
+  state: string | null
+  pin_code: string | null
+  country: string
+  email: string
+  /** UAE: Tax Registration Number (15 digits, starts with 100) and emirate. */
+  trn?: string | null
+  emirate?: string | null
+  updated_at: string
+}
+
+export interface BillingProfileResponse {
+  profile: BillingProfile | null
+  currency: 'INR' | 'AED' | 'USD'
+  /** INR and AED organizations need billing details before their first top-up. */
+  required: boolean
+  can_manage: boolean
+  states: { code: string; name: string }[]
+  /** AED: only VAT-registered UAE businesses (TRN) can buy; invoices are reverse charge. */
+  trn_required?: boolean
+  emirates?: string[]
+}
+
+export type BillingProfileInput = Omit<BillingProfile, 'state' | 'updated_at' | 'country'> & { country?: string | null }
+
+export interface CheckoutQuote {
+  currency: 'INR' | 'AED' | 'USD'
+  credit: number
+  tax: number
+  total: number
+  treatment: 'intra_state' | 'inter_state' | 'export_lut'
+  rate: number
+  cgst: number
+  sgst: number
+  igst: number
+  sgst_label: string
+  place_of_supply: string
+  profile_ready: boolean
+  /** AED: no tax lines; the customer accounts for UAE VAT (reverse charge). */
+  reverse_charge?: boolean
+  trn_required?: boolean
+  trn_message?: string | null
+}
+
+export interface InvoiceRow {
+  id: string
+  number: string
+  doc_type: 'invoice' | 'credit_note'
+  issued_at: string
+  currency: string
+  taxable_value: number
+  tax: number
+  cgst: number
+  sgst: number
+  igst: number
+  total: number
+  tax_treatment: CheckoutQuote['treatment']
+  place_of_supply: string
+  payment_id: string | null
+  buyer_name: string | null
+  buyer_gstin: string | null
+  emailed_at: string | null
 }
 
 /**
@@ -121,11 +191,21 @@ export const billingApi = {
   paymentOptions: (s: BillingScope) => data(http.get<{ currency: string; provider: 'stripe' | 'razorpay' | null; min: number; max: number }>(`${orgBase(s)}/payments/options`)),
   checkout: (s: BillingScope, amount: number) => data(http.post<{ id: string; checkout_url: string }>(`${orgBase(s)}/checkout`, { amount: amount.toFixed(2) })),
   payment: (s: BillingScope, id: string) =>
-    data(http.get<{ id: string; status: 'pending' | 'paid' | 'failed' | 'expired'; amount: number; currency: string; failure_reason: string | null }>(`${orgBase(s)}/payments/${id}`)),
+    data(
+      http.get<{ id: string; status: 'pending' | 'paid' | 'failed' | 'expired'; amount: number; tax_amount?: number; gross_amount?: number; currency: string; failure_reason: string | null; invoice_id?: string | null }>(
+        `${orgBase(s)}/payments/${id}`,
+      ),
+    ),
   threshold: (s: BillingScope, value: number) => data(http.put<BillingSummary>(`${orgBase(s)}/threshold`, { low_balance_threshold: value.toFixed(2) })),
   plan: (s: BillingScope) => data(http.get<PlanOverview>(`${orgBase(s)}/plan`)),
   changePlan: (s: BillingScope, plan: PlanKey) => data(http.post<PlanOverview>(`${orgBase(s)}/plan`, { plan })),
   cancelPlanChange: (s: BillingScope) => data(http.post<PlanOverview>(`${orgBase(s)}/plan/cancel-change`)),
+  profile: (orgId: string) => data(http.get<BillingProfileResponse>(`/organizations/${orgId}/billing/profile`)),
+  saveProfile: (orgId: string, body: BillingProfileInput) => data(http.put<BillingProfile>(`/organizations/${orgId}/billing/profile`, body)),
+  quote: (orgId: string, amount: number) => data(http.get<CheckoutQuote>(`/organizations/${orgId}/billing/quote`, { params: { amount: amount.toFixed(2) } })),
+  invoices: (orgId: string, p: { page: number; page_size: number }) => data(http.get<Page<InvoiceRow>>(`/organizations/${orgId}/billing/invoices`, { params: p })),
+  invoicePdfUrl: (orgId: string, id: string) => `/organizations/${orgId}/billing/invoices/${id}.pdf`,
+  statementUrl: (orgId: string, month: string, format: 'csv' | 'pdf') => `/organizations/${orgId}/billing/statements/${month}.${format}`,
 }
 
 export const analyticsApi = {
@@ -140,7 +220,12 @@ export const bqk = {
   summary: (s: BillingScope) => (s.kind === 'org' && s.app ? ['billing', s.kind, s.id, 'summary', s.app] : ['billing', s.kind, s.id, 'summary']) as readonly unknown[],
   tx: (s: BillingScope, p: object) => ['billing', s.kind, s.id, 'tx', s.kind === 'org' ? (s.app ?? null) : null, p] as const,
   plan: (orgId: string) => ['billing', 'org', orgId, 'plan'] as const,
+  profile: (orgId: string) => ['billing', 'org', orgId, 'profile'] as const,
+  invoices: (orgId: string, page: number) => ['billing', 'org', orgId, 'invoices', page] as const,
 }
+
+export const useBillingProfile = (orgId: string, enabled = true) =>
+  useQuery({ queryKey: bqk.profile(orgId), queryFn: () => billingApi.profile(orgId), enabled })
 
 export const usePlan = (orgId: string, enabled = true) =>
   useQuery({ queryKey: bqk.plan(orgId), queryFn: () => billingApi.plan({ kind: 'org', id: orgId }), enabled, refetchOnMount: 'always' })

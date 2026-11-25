@@ -45,7 +45,7 @@ export function CreateOrganizationPage() {
   const orgs = useOrganizations()
   const { register, handleSubmit, formState, setError } = useForm<z.infer<typeof orgSchema>>({
     resolver: zodResolver(orgSchema),
-    defaultValues: { country: ['IN', 'US'].includes(browserCountry() ?? '') ? browserCountry()! : 'IN' },
+    defaultValues: { country: ['IN', 'AE', 'US'].includes(browserCountry() ?? '') ? browserCountry()! : 'IN' },
   })
 
   if (user && !user.email_verified) return <Navigate to="/verify-email-sent" replace />
@@ -76,7 +76,7 @@ export function CreateOrganizationPage() {
           label="Primary market"
           htmlFor="org-country"
           error={formState.errors.country?.message}
-          hint="Sets defaults for phone numbers, timezones, date formats and compliance rules (TRAI DLT in India; TCPA and CAN-SPAM in the US)."
+          hint="Sets your wallet currency and the defaults for phone numbers, timezones, date formats and compliance rules (TRAI DLT in India; TDRA rules and an AED wallet for VAT-registered businesses in the UAE; TCPA and CAN-SPAM in the US)."
         >
           <Select id="org-country" {...register('country')}>
             <optgroup label="Fully supported">

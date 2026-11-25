@@ -109,6 +109,8 @@ export interface ReadinessCheck {
   /** Requirement shown before the choice it depends on (e.g. no sender yet). */
   pending?: boolean
   meta?: Record<string, unknown> | null
+  /** Shown when failing, but never blocks sending (e.g. an unauthenticated sender domain). */
+  warning?: boolean
 }
 
 export interface WalletInfo {

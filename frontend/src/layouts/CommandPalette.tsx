@@ -31,12 +31,12 @@ import {
 import { audienceApi } from '@/api/audience'
 import { crmApi } from '@/api/crm'
 import { emailApi } from '@/api/email'
-import { smsApi } from '@/api/sms'
 import { voiceApi } from '@/api/voice'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { cn } from '@/lib/utils'
+import { openAssistant } from '@/modules/ai/lib'
 import { appNav, orgNav } from './navigation'
 
 interface Entry {
@@ -93,14 +93,13 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     queryKey: ['palette-campaigns', app?.id, debounced],
     queryFn: async () => {
       const p = { search: debounced, page: 1, page_size: 4 }
-      const [e, s, v] = await Promise.all([
+      // SMS is coming soon: SMS campaigns are not listed.
+      const [e, v] = await Promise.all([
         emailApi(app!.id).campaigns(p).catch(() => null),
-        smsApi(app!.id).campaigns(p).catch(() => null),
         voiceApi(app!.id).campaigns(p).catch(() => null),
       ])
       return [
         ...(e?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'email' as const })),
-        ...(s?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'sms' as const })),
         ...(v?.items ?? []).map((c) => ({ id: c.id, name: c.name, status: c.status, channel: 'voice' as const })),
       ]
     },
@@ -136,7 +135,6 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
     const base = app ? `/apps/${app.id}` : null
     if (base && can('campaigns.write')) {
       list.push({ id: 'a-email', group: 'Create', label: 'New email campaign', icon: Mail, run: go(`${base}/email/campaigns/new`), keywords: 'create send newsletter' })
-      list.push({ id: 'a-sms', group: 'Create', label: 'New SMS campaign', icon: MessageSquare, run: go(`${base}/sms/campaigns/new`), keywords: 'create text message' })
       list.push({ id: 'a-voice', group: 'Create', label: 'New voice campaign', icon: PhoneCall, run: go(`${base}/voice/campaigns/new`), keywords: 'create call broadcast ivr' })
     }
     if (base && can('automation.write'))
@@ -173,6 +171,10 @@ export function CommandPalette({ open, onOpenChange, onShortcuts }: { open: bool
         if (seen.has(c.to)) continue
         seen.add(c.to)
         const shortcut = c.shortcut ?? (c === sharedChild ? item.shortcut : undefined)
+        if (c.action === 'assistant') {
+          list.push({ id: 'a-assistant', group: 'Actions', label: 'Ask the AI Assistant', icon: item.icon, run: () => openAssistant(), shortcut: 'Ctrl J', keywords: 'ai copilot help chat' })
+          continue
+        }
         list.push({ id: `n-${c.to}`, group: 'Go to', label: c.label, hint: item.label, icon: item.icon, run: go(c.to), shortcut })
       }
     }

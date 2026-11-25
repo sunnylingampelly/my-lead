@@ -21,9 +21,10 @@ import {
   Sparkles,
   Trash2,
   Wand2,
+  X,
 } from 'lucide-react'
 import { chatApi, cqk, useBots, useChatStatus } from '@/api/chat'
-import { errorMessage } from '@/api/client'
+import { ApiError, errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, FullPageSpinner, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -55,6 +56,20 @@ function fmtChars(n: number) {
 
 // ------------------------------------------------------------------ list
 
+/**
+ * What people type ("https://www.Shop.com/contact", "shop.com ") → a bare hostname ("www.shop.com"),
+ * keeping a leading "*." for every subdomain. Returns '' if it isn't a plausible website; the server has
+ * the final say.
+ */
+function cleanDomain(raw: string): string {
+  let s = raw.trim().toLowerCase()
+  const wildcard = s.startsWith('*.')
+  if (wildcard) s = s.slice(2)
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split(/[/?#]/)[0]!.split('@').pop()!.replace(/:\d+$/, '').replace(/\.$/, '')
+  if (!(s === 'localhost' || /^([a-z0-9-]{1,63}\.)+[a-z][a-z0-9-]{0,62}$/.test(s))) return ''
+  return wildcard ? `*.${s}` : s
+}
+
 function NewBotDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { app } = useWorkspace()
   const navigate = useNavigate()
@@ -62,19 +77,31 @@ function NewBotDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
   const templates = useQuery({ queryKey: ['chat', app!.id, 'templates'], queryFn: () => chatApi(app!.id).templates(), enabled: open, staleTime: 600_000 })
   const [template, setTemplate] = useState('website_assistant')
   const [name, setName] = useState('')
+  const [website, setWebsite] = useState('')
+  const [websiteError, setWebsiteError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (open) setName('')
+    if (open) {
+      setName('')
+      setWebsite('')
+      setWebsiteError(null)
+    }
   }, [open])
   async function create() {
+    const site = cleanDomain(website)
+    if (!site) {
+      setWebsiteError('Add the website where this chat will appear, like example.com')
+      return
+    }
     setBusy(true)
     try {
-      const b = await chatApi(app!.id).createBot({ name: name.trim() || 'Website assistant', template })
+      const b = await chatApi(app!.id).createBot({ name: name.trim() || 'Website assistant', template, website: site })
       qc.invalidateQueries({ queryKey: cqk.bots(app!.id) })
       onOpenChange(false)
       navigate(`/apps/${app!.id}/chat/bots/${b.id}`)
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && (e.code === 'INVALID_DOMAIN' || e.code === 'DOMAIN_REQUIRED')) setWebsiteError(e.message)
+      else toast.error(errorMessage(e))
     } finally {
       setBusy(false)
     }
@@ -106,9 +133,35 @@ function NewBotDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             ))}
             {templates.isLoading && <LoadingRows rows={2} />}
           </div>
-          <Field label="Name" htmlFor="bot-name" hint="Visitors see it in the chat header.">
-            <Input id="bot-name" value={name} maxLength={120} placeholder="Website assistant" onChange={(e) => setName(e.target.value)} />
-          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Website"
+              htmlFor="bot-website"
+              error={websiteError ?? undefined}
+              hint={websiteError ? undefined : 'Where the chat will appear. It only works on websites you list; add more later.'}
+            >
+              <div className="relative">
+                <Globe className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                <Input
+                  id="bot-website"
+                  value={website}
+                  maxLength={255}
+                  placeholder="yourbusiness.com"
+                  className="pl-9"
+                  inputMode="url"
+                  autoComplete="url"
+                  aria-invalid={!!websiteError}
+                  onChange={(e) => {
+                    setWebsite(e.target.value)
+                    setWebsiteError(null)
+                  }}
+                />
+              </div>
+            </Field>
+            <Field label="Name" htmlFor="bot-name" hint="Visitors see it in the chat header.">
+              <Input id="bot-name" value={name} maxLength={120} placeholder="Website assistant" onChange={(e) => setName(e.target.value)} />
+            </Field>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -172,7 +225,15 @@ export function ChatBotsPage() {
                       <Badge variant={b.status === 'live' ? 'success' : 'secondary'}>{b.status === 'live' ? 'Live' : 'Draft'}</Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {b.source_count ?? 0} training sources · {fmtChars(b.knowledge_chars)} characters · {b.conversation_count ?? 0} conversations
+                      {b.allowed_domains?.length ? (
+                        <span className="font-medium text-foreground/80">
+                          {b.allowed_domains[0]}
+                          {b.allowed_domains.length > 1 && ` +${b.allowed_domains.length - 1}`}
+                        </span>
+                      ) : (
+                        <span className="font-medium text-danger-strong">No website</span>
+                      )}{' '}
+                      · {b.source_count ?? 0} training sources · {fmtChars(b.knowledge_chars)} characters · {b.conversation_count ?? 0} conversations
                     </p>
                   </div>
                   <span className="text-xs text-muted-foreground">Updated {timeAgo(b.updated_at)}</span>
@@ -280,7 +341,7 @@ export function ChatBotEditorPage() {
             <WidgetTab bot={bot} editable={editable} save={save} />
           </TabsContent>
           <TabsContent value="install">
-            <InstallTab bot={bot} />
+            <InstallTab bot={bot} editable={editable} save={save} />
           </TabsContent>
         </Tabs>
         <TestChat bot={bot} editable={editable} />
@@ -751,7 +812,6 @@ function LeadTab({ bot, editable, save }: { bot: ChatBot; editable: boolean; sav
 function WidgetTab({ bot, editable, save }: { bot: ChatBot; editable: boolean; save: SaveFn }) {
   const [a, setA] = useState<Appearance>(bot.appearance)
   const [p, setP] = useState<Proactive>(bot.proactive)
-  const [domains, setDomains] = useState(bot.allowed_domains.join('\n'))
   const [busy, setBusy] = useState(false)
   const up = (x: Partial<Appearance>) => setA({ ...a, ...x })
   const check = (label: string, key: keyof Appearance, disabled = false) => (
@@ -822,12 +882,9 @@ function WidgetTab({ bot, editable, save }: { bot: ChatBot; editable: boolean; s
               </>
             )}
           </fieldset>
-          <Field label="Allowed websites" htmlFor="w-domains" hint="One domain per line (example.com also covers www.example.com; *.example.com covers subdomains). Empty = any website.">
-            <Textarea id="w-domains" rows={3} value={domains} disabled={!editable} onChange={(e) => setDomains(e.target.value)} placeholder="example.com" />
-          </Field>
           {editable && (
             <div>
-              <Button loading={busy} onClick={async () => { setBusy(true); await save({ appearance: a, proactive: p, allowed_domains: domains.split(/[\n,]/).map((d) => d.trim()).filter(Boolean) }); setBusy(false) }}>
+              <Button loading={busy} onClick={async () => { setBusy(true); await save({ appearance: a, proactive: p }); setBusy(false) }}>
                 Save widget
               </Button>
             </div>
@@ -869,11 +926,109 @@ function WidgetPreview({ a, bot }: { a: Appearance; bot: ChatBot }) {
 
 // ------------------------------------------------------------------ install
 
-function InstallTab({ bot }: { bot: ChatBot }) {
+/** The websites a chatbot may appear on. Required: AI replies cost money, so the widget only runs on these. */
+function WebsitesCard({ bot, editable, save }: { bot: ChatBot; editable: boolean; save: SaveFn }) {
+  const [input, setInput] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const domains = bot.allowed_domains ?? []
+  const live = bot.status === 'live'
+  async function apply(next: string[], what: string) {
+    setBusy(true)
+    const ok = await save({ allowed_domains: next }, what)
+    setBusy(false)
+    return ok
+  }
+  async function add() {
+    const d = cleanDomain(input)
+    if (!d) {
+      setError('Enter a website like example.com')
+      return
+    }
+    if (domains.includes(d)) {
+      setError(`${d} is already on the list`)
+      return
+    }
+    if (await apply([...domains, d], `${d} added`)) setInput('')
+  }
+  return (
+    <Card data-testid="websites-card" className={cn(!domains.length && 'border-danger-border')}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe className="size-4 text-primary" /> Websites
+        </CardTitle>
+        <CardDescription>
+          The chat only appears on these websites (and on Signalcraft’s own test page). <code>example.com</code> also covers <code>www.example.com</code>; <code>*.example.com</code> covers every subdomain.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {domains.length ? (
+          <ul className="flex flex-wrap gap-2" aria-label="Allowed websites">
+            {domains.map((d) => {
+              const last = live && domains.length === 1
+              return (
+                <li key={d} className="inline-flex items-center gap-1.5 rounded-full border bg-muted/50 py-1 pl-3 pr-1 text-sm" data-testid="website-chip">
+                  <span className="font-medium">{d}</span>
+                  {editable && (
+                    <button
+                      type="button"
+                      disabled={busy || last}
+                      title={last ? 'A live chatbot needs at least one website' : `Remove ${d}`}
+                      aria-label={`Remove ${d}`}
+                      onClick={() => apply(domains.filter((x) => x !== d), `${d} removed`)}
+                      className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition hover:bg-background hover:text-foreground disabled:opacity-40"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger-strong" data-testid="no-website">
+            This chatbot isn’t allowed on any website yet. Add yours before publishing.
+          </p>
+        )}
+        {editable && (
+          <form
+            className="flex flex-col gap-2 sm:flex-row"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void add()
+            }}
+          >
+            <div className="min-w-0 flex-1">
+              <Input
+                aria-label="Add a website"
+                value={input}
+                maxLength={255}
+                placeholder="shop.example.com"
+                inputMode="url"
+                aria-invalid={!!error}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  setError(null)
+                }}
+              />
+              {error && <p className="mt-1 text-xs text-danger-strong">{error}</p>}
+            </div>
+            <Button type="submit" variant="outline" loading={busy}>
+              <Plus /> Add website
+            </Button>
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function InstallTab({ bot, editable, save }: { bot: ChatBot; editable: boolean; save: SaveFn }) {
   const [copied, setCopied] = useState(false)
   const preview = `/embed/chat-preview/${bot.public_key}`
   return (
     <div className="space-y-6">
+      <WebsitesCard bot={bot} editable={editable} save={save} />
       <Card>
         <CardHeader>
           <CardTitle>Add to your website</CardTitle>
@@ -973,7 +1128,7 @@ function TestChat({ bot, editable }: { bot: ChatBot; editable: boolean }) {
         </div>
       </CardHeader>
       <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4" role="log" aria-live="polite">
-        <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm">{bot.welcome_message}</div>
+        <div dir="auto" className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm">{bot.welcome_message}</div>
         {!msgs.length && !!bot.quick_replies.length && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {bot.quick_replies.map((c) => (
@@ -983,10 +1138,10 @@ function TestChat({ bot, editable }: { bot: ChatBot; editable: boolean }) {
         )}
         {msgs.map((m, i) =>
           m.role === 'user' ? (
-            <div key={i} className="ml-auto max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">{m.content}</div>
+            <div key={i} dir="auto" data-testid="test-user-message" className="ml-auto max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">{m.content}</div>
           ) : (
             <div key={i} className="space-y-1" data-testid="test-reply">
-              <div className="max-w-[90%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm">{m.content}</div>
+              <div dir="auto" className="max-w-[90%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm">{m.content}</div>
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 {m.meta?.simulated && <Badge variant="outline">Simulated</Badge>}
                 {m.meta?.unanswered && <Badge variant="warning">Didn't know</Badge>}
@@ -1005,7 +1160,7 @@ function TestChat({ bot, editable }: { bot: ChatBot; editable: boolean }) {
         {busy && <div className="w-16 animate-pulse rounded-2xl bg-muted px-3 py-2 text-sm">…</div>}
       </div>
       <form className="flex gap-2 border-t p-3" onSubmit={(e) => { e.preventDefault(); send(text) }}>
-        <Input value={text} maxLength={2000} onChange={(e) => setText(e.target.value)} placeholder="Ask something a visitor would…" aria-label="Test message" data-testid="test-input" />
+        <Input value={text} maxLength={2000} onChange={(e) => setText(e.target.value)} placeholder="Ask something a visitor would…" aria-label="Test message" data-testid="test-input" dir="auto" />
         <Button type="submit" size="icon" aria-label="Send" disabled={busy || !text.trim()}><Send /></Button>
       </form>
       {improve && (

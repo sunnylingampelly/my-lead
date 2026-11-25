@@ -2,24 +2,23 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { AlertTriangle, ExternalLink, Info, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { aqk, audienceApi, useFieldCatalog, useLists, useSegments, useTags } from '@/api/audience'
+import { aqk, audienceApi, useAttributes, useFieldCatalog, useLists, useSegments, useTags } from '@/api/audience'
+import { useSlackChannels, useSlackStatus } from '@/api/ai'
 import type { FlowNode, NodeType } from '@/api/automation'
 import { errorMessage } from '@/api/client'
 import { useCampaigns, useSenders, useTemplates } from '@/api/email'
-import { useSmsSenders, useSmsTemplates } from '@/api/sms'
 import { useAudio, useVoiceCampaigns } from '@/api/voice'
 import { useForms } from '@/api/forms'
 import { useBots } from '@/api/chat'
 import { useAssignmentRules, useCrmSettings, useCrmTeam, usePipelines, useScoringRules } from '@/api/crm'
 import { Button } from '@/components/ui/button'
-import { Field, Input, Select } from '@/components/ui/form-controls'
+import { Field, Input, Select, Textarea } from '@/components/ui/form-controls'
 import { Checkbox } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { cn } from '@/lib/utils'
 import type { SegmentGroup } from '@/types/audience'
 import { GroupEditor } from '../audience/SegmentBuilderPage'
-import { SmsComposer } from '../sms/components'
-import { CRM_ACTION_LABEL, CRM_TRIGGERS, DEAL_TRIGGERS, ENGAGEMENT_TRIGGERS, NODE_META, TRIGGER_LABEL } from './meta'
+import { COMING_SOON_TRIGGERS, CRM_ACTION_LABEL, CRM_TRIGGERS, DEAL_TRIGGERS, ENGAGEMENT_TRIGGERS, NODE_META, TRIGGER_LABEL } from './meta'
 
 type Data = Record<string, unknown>
 
@@ -204,7 +203,12 @@ function Body({ type, d, set, str, appId, base, nodes, nodeId }: FormProps & { t
     case 'send_email':
       return <EmailForm {...p} />
     case 'send_sms':
-      return <SmsForm {...p} />
+      // SMS is coming soon in every market: existing SMS steps are skipped and can't be configured.
+      return (
+        <p className="rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-sm text-warning-strong" data-testid="sms-step-soon">
+          SMS is coming soon. This step is skipped when the workflow runs; remove it before publishing.
+        </p>
+      )
     case 'voice_call':
       return <VoiceForm {...p} />
     case 'wait':
@@ -237,6 +241,10 @@ function Body({ type, d, set, str, appId, base, nodes, nodeId }: FormProps & { t
       return <UpdateForm {...p} />
     case 'crm_action':
       return <CrmActionForm {...p} />
+    case 'ai_step':
+      return <AiStepForm {...p} />
+    case 'slack_message':
+      return <SlackForm {...p} />
     default:
       return <p className="text-sm text-muted-foreground">The journey ends here for this person.</p>
   }
@@ -291,7 +299,7 @@ function TriggerForm({ set, str, appId, base }: FormProps) {
           ).map(([group, keys]) => (
             <optgroup key={group} label={group}>
               {keys.map((k) => (
-                <option key={k} value={k}>
+                <option key={k} value={k} disabled={COMING_SOON_TRIGGERS.includes(k) && k !== kind}>
                   {TRIGGER_LABEL[k]}
                 </option>
               ))}
@@ -501,73 +509,6 @@ function EmailForm({ set, str, appId, base }: FormProps) {
         <Input id="e-subj" value={str('subject')} onChange={(e) => set({ subject: e.target.value })} />
       </Field>
       <p className="text-xs text-muted-foreground">Each person receives this email at most once. Consent and suppression are checked at send time.</p>
-    </>
-  )
-}
-
-function SmsForm({ d, set, str, appId, base }: FormProps) {
-  const { app } = useWorkspace()
-  const senders = useSmsSenders(appId)
-  const templates = useSmsTemplates(appId)
-  const sender = senders.data?.find((s) => s.id === str('sender_ref'))
-  const india = sender ? sender.country === 'IN' : (app?.default_country ?? 'IN') === 'IN'
-  const tpl = templates.data?.find((t) => t.id === str('template_id'))
-  return (
-    <>
-      {india && (
-        <Note>
-          <p>
-            <strong>India (DLT):</strong> every SMS must use a DLT-approved sender ID and match a DLT-registered template exactly. Choose a template that has a DLT ID{tpl ? '' : ' below'}; free text is blocked by operators.
-          </p>
-          {tpl && <p data-testid="dlt-required">DLT template required: {tpl.dlt_template_id ? <strong>{tpl.dlt_template_id}</strong> : <span className="text-warning-strong">this template has no DLT ID yet</span>}</p>}
-        </Note>
-      )}
-      <Field label="Sender ID" htmlFor="s-sender">
-        <Select id="s-sender" value={str('sender_ref')} onChange={(e) => set({ sender_ref: e.target.value })}>
-          <option value="">Choose…</option>
-          {senders.data?.map((s) => (
-            <option key={s.id} value={s.id} disabled={s.status !== 'active'}>
-              {s.sender_id} ({s.country}){s.status !== 'active' ? ' · inactive' : ''}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <CreateElsewhere what="sender IDs" empty={senders.data?.length === 0} to={`${base}/sms/senders`} onRefresh={() => senders.refetch()} refreshing={senders.isFetching} />
-      <Field label="Type" htmlFor="s-cat">
-        <Select id="s-cat" value={str('category') || 'promotional'} onChange={(e) => set({ category: e.target.value })}>
-          <option value="promotional">Promotional</option>
-          <option value="transactional">Transactional</option>
-          <option value="service">Service</option>
-        </Select>
-      </Field>
-      <Field label={india ? 'DLT template' : 'Template (optional)'} htmlFor="s-tpl">
-        <Select
-          id="s-tpl"
-          value={str('template_id')}
-          onChange={(e) => {
-            const t = templates.data?.find((x) => x.id === e.target.value)
-            set({ template_id: e.target.value || null, body: t ? t.body : str('body') })
-          }}
-        >
-          <option value="">{india ? 'Choose…' : 'Write my own'}</option>
-          {templates.data?.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-              {t.dlt_template_id ? ` · DLT ${t.dlt_template_id}` : ''}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <CreateElsewhere what="SMS templates" empty={templates.data?.length === 0} to={`${base}/sms/templates`} onRefresh={() => templates.refetch()} refreshing={templates.isFetching} />
-      <Field label="Message" htmlFor="s-body">
-        <SmsComposer id="s-body" appId={appId} value={str('body')} onChange={(v) => set({ body: v })} />
-      </Field>
-      {sender?.country === 'US' && str('category') !== 'transactional' && (
-        <label className="flex items-start gap-2 text-sm">
-          <Checkbox checked={d.append_opt_out !== false} onChange={(e) => set({ append_opt_out: e.target.checked })} aria-label="Add opt-out text" />
-          Add “Reply STOP to opt out”
-        </label>
-      )}
     </>
   )
 }
@@ -878,5 +819,107 @@ function CrmActionForm({ d, set, str, appId, base }: FormProps) {
         </Field>
       )}
     </>
+  )
+}
+
+const AI_MODES: Record<string, [string, string]> = {
+  classify: ['Classify', 'Pick one of your categories, e.g. the intent of a lead'],
+  extract: ['Extract', 'Pull a value out of the contact’s details'],
+  write: ['Write', 'Write a short text, e.g. a personal opening line'],
+}
+
+function AiStepForm({ d, set, str, appId, base }: FormProps) {
+  const attrs = useAttributes(appId)
+  const fields = (attrs.data ?? []).filter((a) => a.data_type === 'text' || a.data_type === 'select')
+  const cats = Array.isArray(d.categories) ? (d.categories as string[]) : []
+  return (
+    <div className="space-y-4">
+      <Field label="What the AI does" htmlFor="ai-mode">
+        <Select id="ai-mode" value={str('mode') || 'classify'} onChange={(e) => set({ mode: e.target.value })}>
+          {Object.entries(AI_MODES).map(([k, [label]]) => (
+            <option key={k} value={k}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <p className="-mt-2 text-xs text-muted-foreground">{AI_MODES[str('mode') || 'classify']?.[1]}</p>
+      <Field label="Instruction" htmlFor="ai-prompt" hint="The AI sees the contact’s details (name, company, source, fields) as data, never as instructions.">
+        <Textarea id="ai-prompt" value={str('prompt')} onChange={(e) => set({ prompt: e.target.value })} maxLength={2000} placeholder="What is this lead most likely interested in?" />
+      </Field>
+      {(str('mode') || 'classify') === 'classify' && (
+        <Field label="Categories" htmlFor="ai-cats" hint="Comma-separated, 2 to 10. For a dropdown field, use its options.">
+          <Input id="ai-cats" value={cats.join(', ')} onChange={(e) => set({ categories: e.target.value.split(',').map((c) => c.trim()).filter(Boolean) })} />
+        </Field>
+      )}
+      <Field
+        label="Save the result to"
+        htmlFor="ai-field"
+        hint="A text or dropdown custom field. Use it in later conditions."
+        action={
+          <a className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" href={`${base}/audience/fields`} target="_blank" rel="noreferrer">
+            New field <ExternalLink className="size-3" />
+          </a>
+        }
+      >
+        <Select id="ai-field" value={str('output_field')} onChange={(e) => set({ output_field: e.target.value })}>
+          <option value="">{fields.length ? 'Choose a field…' : 'No text or dropdown fields yet'}</option>
+          {fields.map((a) => (
+            <option key={a.id} value={a.key}>
+              {a.label} ({a.data_type === 'select' ? 'dropdown' : 'text'})
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Note>AI steps count toward your plan’s daily AI runs. Over the limit, the step is skipped and the journey continues.</Note>
+    </div>
+  )
+}
+
+const SLACK_TOKENS = ['{{contact.first_name}}', '{{contact.last_name}}', '{{contact.email}}', '{{contact.phone}}', '{{contact.company}}', '{{contact.lead_score}}']
+
+function SlackForm({ set, str, appId }: FormProps) {
+  const status = useSlackStatus(appId)
+  const channels = useSlackChannels(appId, !!status.data?.connected)
+  if (status.data && !status.data.connected)
+    return (
+      <Note tone="warn">
+        Slack isn’t connected yet.{' '}
+        <a className="font-medium text-primary hover:underline" href={`/apps/${appId}/ai/integrations`} target="_blank" rel="noreferrer">
+          Connect Slack
+        </a>{' '}
+        and come back.
+      </Note>
+    )
+  return (
+    <div className="space-y-4">
+      <Field label="Channel" htmlFor="sl-ch">
+        <Select
+          id="sl-ch"
+          value={str('channel_id')}
+          onChange={(e) => {
+            const ch = channels.data?.find((c) => c.id === e.target.value)
+            set({ channel_id: e.target.value, channel_name: ch?.name ?? '' })
+          }}
+        >
+          <option value="">Choose a channel…</option>
+          {channels.data?.map((c) => (
+            <option key={c.id} value={c.id}>
+              #{c.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field label="Message" htmlFor="sl-msg" hint="Contact details are filled in for each person.">
+        <Textarea id="sl-msg" value={str('message')} onChange={(e) => set({ message: e.target.value })} maxLength={3000} className="min-h-[100px]" />
+      </Field>
+      <div className="flex flex-wrap gap-1">
+        {SLACK_TOKENS.map((t) => (
+          <button key={t} type="button" onClick={() => set({ message: `${str('message')}${str('message').endsWith(' ') || !str('message') ? '' : ' '}${t}` })} className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] hover:border-primary/50">
+            {t}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }

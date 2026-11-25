@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { ChevronDown, ChevronsLeft, ChevronsRight, Clock3, ListChecks } from 'lucide-react'
 import { useChecklist, useProvidersStatus } from '@/api/queries'
+import { useAiStatus } from '@/api/ai'
+import { openAssistant } from '@/modules/ai/lib'
 import { CHECKLIST_ANCHOR, useChecklistHidden } from '@/modules/dashboard/checklistState'
 import { Logo } from '@/components/logo'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -59,6 +61,11 @@ function Item({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boole
     >
       <Icon className="size-4 shrink-0" />
       {!collapsed && <span className="truncate">{item.label}</span>}
+      {!collapsed && item.badge && (
+        <span className="ml-auto rounded bg-sidebar-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sidebar-muted" data-testid={`nav-badge-${item.label}`}>
+          {item.badge}
+        </span>
+      )}
     </NavLink>
   )
 
@@ -90,25 +97,54 @@ function Item({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boole
       </div>
       {expanded && (
         <div className="ml-[17px] mt-0.5 space-y-px border-l border-sidebar-border pl-2.5 animate-in fade-in-0 slide-in-from-top-1">
-          {item.children!.map((c) => (
-            <NavLink
-              key={c.to}
-              to={c.to}
-              end={c.end}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                cn(
-                  'flex h-7 items-center rounded-md px-2 text-[12.5px] transition-colors',
-                  isActive ? 'bg-sidebar-accent font-medium text-white' : 'text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-white',
-                )
-              }
-            >
-              {c.label}
-            </NavLink>
-          ))}
+          {item.children!.map((c) =>
+            c.action === 'assistant' ? (
+              <button
+                key={c.to}
+                type="button"
+                onClick={() => {
+                  onNavigate?.()
+                  openAssistant()
+                }}
+                className="flex h-7 w-full items-center rounded-md px-2 text-left text-[12.5px] text-sidebar-muted transition-colors hover:bg-sidebar-accent/60 hover:text-white"
+                data-testid="nav-ai-assistant"
+              >
+                {c.label}
+              </button>
+            ) : (
+              <NavLink
+                key={c.to}
+                to={c.to}
+                end={c.end}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    'flex h-7 items-center rounded-md px-2 text-[12.5px] transition-colors',
+                    isActive ? 'bg-sidebar-accent font-medium text-white' : 'text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-white',
+                  )
+                }
+              >
+                {c.label}
+                {c.badgeKey === 'approvals' && <ApprovalsBadge />}
+              </NavLink>
+            ),
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+/** Pending AI agent approvals for the current application. */
+function ApprovalsBadge() {
+  const { app } = useWorkspace()
+  const q = useAiStatus(app?.id, !!app?.permissions.includes('ai.manage'))
+  const n = q.data?.pending_approvals ?? 0
+  if (!n) return null
+  return (
+    <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold tabular-nums text-slate-900" aria-label={`${n} waiting`} data-testid="approvals-badge">
+      {n > 99 ? '99+' : n}
+    </span>
   )
 }
 

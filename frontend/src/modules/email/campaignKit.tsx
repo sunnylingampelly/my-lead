@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Users,
   Wallet,
+  TriangleAlert,
   X,
   XCircle,
 } from 'lucide-react'
@@ -38,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/form-controls'
 import { Checkbox } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { formatCount } from '@/lib/regions'
+import { currencyLocale, formatCount } from '@/lib/regions'
 import { cn } from '@/lib/utils'
 import type { CampaignAudience, ReadinessCheck, WalletInfo } from '@/types/email'
 import type { QuietWait } from '@/types/sms'
@@ -50,7 +51,7 @@ export type Channel = 'email' | 'sms' | 'voice'
 // eslint-disable-next-line react-refresh/only-export-components
 export function money(amount: number, currency: string) {
   try {
-    return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', { style: 'currency', currency, maximumFractionDigits: amount < 1 ? 4 : 2 }).format(amount)
+    return new Intl.NumberFormat(currencyLocale(currency), { style: 'currency', currency, maximumFractionDigits: amount < 1 ? 4 : 2 }).format(amount)
   } catch {
     return `${currency} ${amount.toFixed(2)}`
   }
@@ -409,6 +410,8 @@ export function ReadinessList({
           <li key={c.key} className="flex flex-wrap items-start gap-3 py-3 sm:flex-nowrap" data-check={c.key} data-ok={c.ok}>
             {c.ok ? (
               <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-success-strong" />
+            ) : c.warning ? (
+              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warning-strong" aria-label="Warning" />
             ) : c.pending ? (
               <Clock className="mt-0.5 size-5 shrink-0 text-warning-strong" aria-label="Needed" />
             ) : (
@@ -418,6 +421,7 @@ export function ReadinessList({
               <div className="text-sm font-medium">
                 {c.label}
                 {c.pending && <span className="ml-2 rounded bg-warning-soft px-1.5 py-0.5 text-[11px] font-medium text-warning-strong">Needed</span>}
+                {!c.ok && c.warning && <span className="ml-2 rounded bg-warning-soft px-1.5 py-0.5 text-[11px] font-medium text-warning-strong">Warning</span>}
                 {term && <WhatIsThis term={term} />}
               </div>
               {c.detail && <div className="text-xs text-muted-foreground">{c.detail}</div>}

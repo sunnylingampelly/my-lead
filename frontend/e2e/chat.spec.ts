@@ -23,6 +23,10 @@ test('website chatbot: create from a template, train, test, chat as a visitor, h
   await page.getByTestId('new-bot').click()
   await page.getByRole('radio', { name: /Website assistant/ }).click()
   await page.getByLabel('Name').fill('Chai Helper')
+  // The website is required: the chat only runs on the sites you list.
+  await page.getByTestId('create-bot').click()
+  await expect(page.getByRole('dialog')).toContainText('Add the website where this chat will appear')
+  await page.getByLabel('Website').fill('https://www.ChaiAndCo.in/contact')
   await page.getByTestId('create-bot').click()
   await expect(page.getByRole('heading', { name: 'Chai Helper' })).toBeVisible()
 
@@ -46,6 +50,16 @@ test('website chatbot: create from a template, train, test, chat as a visitor, h
   await page.getByTestId('publish-bot').click()
   await expect(page.getByTestId('bot-status')).toHaveText('Live')
   await page.getByRole('tab', { name: 'Install' }).click()
+  // The website typed at creation, cleaned up; another can be added, and a live bot keeps at least one.
+  const sites = page.getByTestId('websites-card')
+  await expect(sites.getByTestId('website-chip')).toHaveText(['www.chaiandco.in'])
+  await expect(sites.getByRole('button', { name: 'Remove www.chaiandco.in' })).toBeDisabled()
+  await sites.getByLabel('Add a website').fill('not a website')
+  await sites.getByRole('button', { name: 'Add website' }).click()
+  await expect(sites).toContainText('Enter a website like example.com')
+  await sites.getByLabel('Add a website').fill('*.chaiandco.in')
+  await sites.getByRole('button', { name: 'Add website' }).click()
+  await expect(sites.getByTestId('website-chip')).toHaveText(['www.chaiandco.in', '*.chaiandco.in'])
   const snippet = await page.getByTestId('snippet').textContent()
   const key = /data-bot="([^"]+)"/.exec(snippet ?? '')![1]!
   await shot(page, 'chat-bot-editor')
@@ -68,9 +82,9 @@ test('website chatbot: create from a template, train, test, chat as a visitor, h
   await form.getByRole('textbox', { name: /Email/ }).fill('asha.chat@example.com')
   await form.getByRole('checkbox').check()
   await form.getByRole('button', { name: 'Send' }).click()
-  await expect(visitor.getByText(/Thanks, Asha!/)).toBeVisible()
+  await expect(visitor.getByRole('log', { name: 'Chat messages' }).getByText(/Thanks, Asha!/)).toBeVisible()
   await visitor.getByRole('button', { name: 'Talk to a human' }).last().click()
-  await expect(visitor.getByText(/Connecting you with a team member/)).toBeVisible()
+  await expect(visitor.getByRole('log', { name: 'Chat messages' }).getByText(/Connecting you with a team member/)).toBeVisible()
   await noHorizontalScroll(visitor)
   await shot(visitor, 'chat-widget-390')
 

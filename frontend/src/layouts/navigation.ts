@@ -13,6 +13,7 @@ import {
   PhoneCall,
   ScrollText,
   Settings,
+  Sparkles,
   Users,
   UsersRound,
   Workflow,
@@ -24,6 +25,10 @@ export interface NavChild {
   to: string
   end?: boolean
   shortcut?: string
+  /** Rendered as a button that runs this action instead of a link (e.g. opening the AI Assistant panel). */
+  action?: 'assistant'
+  /** A live count shown after the label. */
+  badgeKey?: 'approvals'
 }
 
 export interface NavItem {
@@ -31,6 +36,8 @@ export interface NavItem {
   icon: LucideIcon
   to?: string
   soon?: string
+  /** Small tag after the label, e.g. "Soon" for a module that only shows a coming-soon page. */
+  badge?: string
   end?: boolean
   shortcut?: string
   children?: NavChild[]
@@ -88,19 +95,8 @@ export function appNav(app: Application | null): NavItem[] {
         ...(can('settings.read') ? [{ label: 'Senders', to: `${base}/email/senders` }] : []),
       ],
     },
-    {
-      label: 'SMS',
-      icon: MessageSquare,
-      to: `${base}/sms`,
-      end: true,
-      shortcut: 'G X',
-      children: [
-        { label: 'Campaigns', to: `${base}/sms/campaigns` },
-        { label: 'Templates', to: `${base}/sms/templates` },
-        { label: 'Replies', to: `${base}/sms/inbox` },
-        ...(can('settings.read') ? [{ label: 'Sender IDs', to: `${base}/sms/senders` }, { label: 'DLT & 10DLC', to: `${base}/sms/registration` }] : []),
-      ],
-    },
+    // SMS is coming soon in every market: one entry to the coming-soon page, no sub-pages.
+    { label: 'SMS', icon: MessageSquare, to: `${base}/sms`, badge: 'Soon' },
     {
       label: 'Voice',
       icon: PhoneCall,
@@ -132,6 +128,21 @@ export function appNav(app: Application | null): NavItem[] {
         ]
       : []),
     { label: 'Automation', icon: Workflow, to: `${base}/automation`, shortcut: 'G W' },
+    ...(can('ai.use')
+      ? [
+          {
+            label: 'AI Team',
+            icon: Sparkles,
+            to: `${base}/ai/agents`,
+            children: [
+              { label: 'AI Assistant', to: `${base}/ai/assistant`, action: 'assistant' as const },
+              { label: 'AI Agents', to: `${base}/ai/agents` },
+              ...(can('ai.manage') ? [{ label: 'Approvals', to: `${base}/ai/approvals`, badgeKey: 'approvals' as const }] : []),
+              { label: 'Integrations', to: `${base}/ai/integrations` },
+            ],
+          },
+        ]
+      : []),
     ...(can('analytics.read') ? [{ label: 'Analytics', icon: BarChart3, to: `${base}/analytics`, shortcut: 'G Y' }] : []),
     ...(can('settings.read') ? [{ label: 'Settings', icon: Settings, to: `${base}/settings`, shortcut: 'G E' }] : []),
   ]

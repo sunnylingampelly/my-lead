@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { pct } from '../email/components'
 import { channelColors } from '../billing/colors'
 import { formatMoney } from '../sms/format'
+import { FormsChatCard } from './FormsChatCard'
 
 const PRESETS = [
   ['7', 'Last 7 days'],
@@ -138,7 +139,7 @@ function CrmCard({ crm, base, f }: { crm: CrmBlock; base: string; f: (n: number)
 function GetStarted({ base, setup }: { base: string; setup: AnalyticsOverview['setup'] }) {
   const steps = [
     { done: setup.sender_verified, icon: BadgeCheck, title: 'Verify a sender', text: 'Confirm the address your emails come from.', to: `${base}/email/senders` },
-    { done: setup.campaign_sent, icon: Send, title: 'Send your first campaign', text: 'Email, SMS or a voice call to a list or segment.', to: `${base}/email/campaigns` },
+    { done: setup.campaign_sent, icon: Send, title: 'Send your first campaign', text: 'An email or a voice call to a list or segment.', to: `${base}/email/campaigns` },
     { done: setup.workflow_created, icon: Workflow, title: 'Build a workflow', text: 'Welcome new contacts or follow up automatically.', to: `${base}/automation` },
   ]
   return (
@@ -206,7 +207,10 @@ export function AnalyticsPage() {
   )
   const t = d?.totals ?? {}
   const base = `/apps/${app!.id}`
-  const empty = !!d && ['email_sent', 'sms_sent', 'voice_calls', 'automation_entered', 'spend'].every((k) => !((t[k] ?? 0) > 0)) && d.top_campaigns.length === 0
+  const empty =
+    !!d &&
+    ['email_sent', 'sms_sent', 'voice_calls', 'automation_entered', 'spend', 'form_views', 'form_submissions', 'chat_conversations'].every((k) => !((t[k] ?? 0) > 0)) &&
+    d.top_campaigns.length === 0
   const crmActive = !!d?.crm && (d.crm.deals_created > 0 || d.crm.open_deals > 0 || d.crm.won > 0 || d.crm.lost > 0)
 
   return (
@@ -270,18 +274,7 @@ export function AnalyticsPage() {
                   </>
                 }
               />
-              <StatCard
-                label="Texts sent"
-                value={f(t.sms_sent ?? 0)}
-                icon={MessageSquare}
-                hint={
-                  <>
-                    {pct(d.rates.sms_delivery)} delivered
-                    <br />
-                    <Delta value={d.changes.sms_sent} />
-                  </>
-                }
-              />
+              <StatCard label="Texts" value="Coming soon" icon={MessageSquare} hint="SMS is coming soon" />
               <StatCard
                 label="Calls finished"
                 value={f(t.voice_calls ?? 0)}
@@ -326,6 +319,8 @@ export function AnalyticsPage() {
 
           {d.crm && <CrmCard crm={d.crm} base={base} f={f} />}
 
+          <FormsChatCard d={d} base={base} f={f} />
+
           <Card>
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
               <div>
@@ -345,7 +340,6 @@ export function AnalyticsPage() {
                         <TH>Date</TH>
                         <TH className="text-right">Emails</TH>
                         <TH className="text-right">Opens</TH>
-                        <TH className="text-right">Texts</TH>
                         <TH className="text-right">Calls</TH>
                         <TH className="text-right">Journeys</TH>
                         <TH className="text-right">Spend</TH>
@@ -357,7 +351,6 @@ export function AnalyticsPage() {
                           <TD>{p.date}</TD>
                           <TD className="text-right tabular-nums">{p.email_sent}</TD>
                           <TD className="text-right tabular-nums">{p.email_opened}</TD>
-                          <TD className="text-right tabular-nums">{p.sms_sent}</TD>
                           <TD className="text-right tabular-nums">{p.voice_calls}</TD>
                           <TD className="text-right tabular-nums">{p.automation_entered}</TD>
                           <TD className="text-right tabular-nums">{formatMoney(Number(p.spend), d.currency)}</TD>
@@ -376,7 +369,6 @@ export function AnalyticsPage() {
                       <ChartTooltip contentStyle={tooltipStyle} />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
                       <Line type="monotone" dataKey="email_sent" name="Emails" stroke={colors.email} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="sms_sent" name="Texts" stroke={colors.sms} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                       <Line type="monotone" dataKey="voice_calls" name="Calls" stroke={colors.voice} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -414,23 +406,12 @@ export function AnalyticsPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <MessageSquare className="size-4" style={{ color: colors.sms }} /> SMS
+                  <MessageSquare className="size-4" style={{ color: colors.sms }} /> SMS <Badge variant="secondary">Coming soon</Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <Funnel
-                  to={`${base}/sms/campaigns`}
-                  color={colors.sms}
-                  steps={[
-                    ['Sent', t.sms_sent ?? 0],
-                    ['Delivered', t.sms_delivered ?? 0],
-                  ]}
-                />
-                <p className="mt-3 text-xs text-muted-foreground">
-                  {f(t.sms_failed ?? 0)} not delivered.{' '}
-                  <Link className="text-primary hover:underline" to={`${base}/sms/campaigns`}>
-                    Campaign reports
-                  </Link>
+                <p className="text-sm text-muted-foreground" data-testid="analytics-sms-soon">
+                  SMS is coming soon. Delivery funnels for texts appear here once it is available.
                 </p>
               </CardContent>
             </Card>

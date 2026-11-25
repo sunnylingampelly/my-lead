@@ -640,7 +640,7 @@ export function SmsTemplatesPage() {
 
 // ------------------------------------------------------------------ senders
 
-const KINDS: Record<SmsCountry, SenderKind[]> = { IN: ['promotional', 'transactional', 'service'], US: ['long_code', 'toll_free', 'short_code'] }
+const KINDS: Record<SmsCountry, SenderKind[]> = { IN: ['promotional', 'transactional', 'service'], AE: ['promotional', 'transactional', 'service'], US: ['long_code', 'toll_free', 'short_code'] }
 const PLACEHOLDER: Record<SenderKind, string> = {
   promotional: '561234',
   transactional: 'ACMEIN',

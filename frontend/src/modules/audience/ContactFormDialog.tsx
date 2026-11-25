@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, Input, Select, Textarea } from '@/components/ui/form-controls'
 import { Checkbox, PhoneInput } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { ALL_COUNTRIES, INDIAN_STATES, US_STATES } from '@/lib/regions'
+import { ALL_COUNTRIES, EMIRATES, INDIAN_STATES, US_STATES } from '@/lib/regions'
 import type { Attribute, ContactDetail, ContactInput } from '@/types/audience'
 import type { Ref } from '@/types/crm'
 import { CompanyPicker, OwnerSelect } from '../crm/components'
@@ -237,8 +237,8 @@ export function ContactFormDialog({
                 ))}
               </Select>
             </Field>
-            <Field label={country === 'US' ? 'State' : 'State / UT'} htmlFor="c-state">
-              {country === 'US' || country === 'IN' ? (
+            <Field label={country === 'US' ? 'State' : country === 'AE' ? 'Emirate' : 'State / UT'} htmlFor="c-state">
+              {country === 'US' || country === 'IN' || country === 'AE' ? (
                 <Select id="c-state" {...register('state')}>
                   <option value="">—</option>
                   {country === 'US'
@@ -247,7 +247,7 @@ export function ContactFormDialog({
                           {name}
                         </option>
                       ))
-                    : INDIAN_STATES.map((s) => <option key={s}>{s}</option>)}
+                    : (country === 'AE' ? EMIRATES : INDIAN_STATES).map((s) => <option key={s}>{s}</option>)}
                 </Select>
               ) : (
                 <Input id="c-state" {...register('state')} />

@@ -11,6 +11,11 @@ export interface User {
   last_organization_id: string | null
   last_application_id: string | null
   created_at: string
+  mfa_enabled?: boolean
+  /** An organization this user owns/administers requires two-factor and it isn't set up yet. */
+  mfa_setup_required?: boolean
+  /** Platform super-admins without two-factor. */
+  mfa_recommended?: boolean
 }
 
 export interface AuthResponse {
@@ -18,6 +23,43 @@ export interface AuthResponse {
   token_type: 'bearer'
   expires_in: number
   user: User
+}
+
+/** /auth/login answer for accounts with two-factor on: finish with authApi.loginMfa. */
+export interface MfaChallenge {
+  mfa_required: true
+  code: 'MFA_REQUIRED'
+  mfa_token: string
+  expires_in: number
+}
+
+export interface MfaStatus {
+  enabled: boolean
+  enabled_at: string | null
+  recovery_codes_remaining: number
+  required_by_organization: boolean
+  recommended: boolean
+}
+
+export interface MfaSetup {
+  secret: string
+  otpauth_uri: string
+  qr_data_uri: string | null
+}
+
+export interface DataRequest {
+  id: string
+  kind: 'export' | 'erasure'
+  status: string
+  contact_id: string
+  subject_label: string | null
+  application_id: string
+  application_name: string | null
+  requested_by_id: string | null
+  requested_by_name: string | null
+  details: Record<string, number>
+  created_at: string
+  completed_at: string | null
 }
 
 export interface Page<T> {
@@ -40,6 +82,9 @@ export interface Organization {
   role_label: string
   permissions: string[]
   application_count: number
+  require_mfa_admins?: boolean
+  /** This owner/admin must set up two-factor before org admin actions work. */
+  mfa_setup_required?: boolean
   /** Set when platform staff see this organization through a read-only support session. */
   support_access_expires_at?: string | null
 }
@@ -177,7 +222,7 @@ export interface DashboardData {
     href: string | null
     created_at: string
   }[]
-  channels: Record<'audience' | 'email' | 'sms' | 'voice', { count_30d: number; ready: boolean; setup_href: string }>
+  channels: Record<'audience' | 'email' | 'sms' | 'voice', { count_30d: number; ready: boolean; setup_href: string; coming_soon?: boolean }>
   modules: Record<string, boolean>
   is_org_wide_role: boolean
   segment_count: number

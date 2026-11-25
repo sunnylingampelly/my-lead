@@ -29,7 +29,7 @@ const FIELDS: (keyof FormState)[] = ['name', 'domain', 'industry', 'size', 'annu
 
 function toForm(c?: Company | null, country = 'IN'): FormState {
   const f = Object.fromEntries(FIELDS.map((k) => [k, ''])) as FormState
-  if (!c) return { ...f, country, currency: country === 'IN' ? 'INR' : 'USD' }
+  if (!c) return { ...f, country, currency: country === 'IN' ? 'INR' : country === 'AE' ? 'AED' : 'USD' }
   for (const k of FIELDS) {
     const v = k === 'owner_id' ? c.owner?.id : (c as unknown as Record<string, unknown>)[k]
     f[k] = v === null || v === undefined ? '' : String(v)
@@ -140,6 +140,7 @@ export function CompanyFormDialog({ appId, open, onOpenChange, company, onSaved 
             <div className="flex gap-2">
               <Select aria-label="Currency" value={f.currency} onChange={(e) => set('currency', e.target.value)} className="w-24">
                 <option value="INR">INR</option>
+                <option value="AED">AED</option>
                 <option value="USD">USD</option>
               </Select>
               <Input id="co-revenue" type="number" min={0} value={f.annual_revenue} onChange={(e) => set('annual_revenue', e.target.value)} />

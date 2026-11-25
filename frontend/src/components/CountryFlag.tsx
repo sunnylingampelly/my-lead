@@ -15,6 +15,15 @@ export function CountryFlag({ code, className }: { code?: string | null; classNa
         <circle cx="15" cy="10" r="2.6" fill="none" stroke="#000080" strokeWidth="0.8" />
       </svg>
     )
+  if (c === 'AE')
+    return (
+      <svg viewBox="0 0 30 15" className={cn('h-3 w-[18px] shrink-0 rounded-[2px] ring-1 ring-border', className)} role="img" aria-label="United Arab Emirates">
+        <rect width="30" height="5" fill="#00732F" />
+        <rect y="5" width="30" height="5" fill="#fff" />
+        <rect y="10" width="30" height="5" fill="#000" />
+        <rect width="7.5" height="15" fill="#FF0000" />
+      </svg>
+    )
   if (c === 'US')
     return (
       <svg viewBox="0 0 38 20" className={cn('h-3 w-[18px] shrink-0 rounded-[2px] ring-1 ring-border', className)} role="img" aria-label="United States">

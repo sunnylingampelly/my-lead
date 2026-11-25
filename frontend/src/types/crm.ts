@@ -8,7 +8,7 @@ export type TaskType = 'call' | 'email' | 'meeting' | 'follow_up' | 'todo'
 export type Priority = 'low' | 'normal' | 'high'
 export type ActivityType = 'call' | 'meeting' | 'email' | 'whatsapp' | 'sms' | 'visit' | 'other'
 export type DealStatus = 'open' | 'won' | 'lost'
-export type CurrencyCode = 'INR' | 'USD'
+export type CurrencyCode = 'INR' | 'AED' | 'USD'
 
 export interface UserRef {
   id: string

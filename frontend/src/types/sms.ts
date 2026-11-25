@@ -1,7 +1,7 @@
 import type { CampaignAudience, CampaignStatus, Estimate, ReadinessCheck, WalletInfo } from './email'
 
 export type SmsCategory = 'promotional' | 'transactional' | 'service'
-export type SmsCountry = 'IN' | 'US'
+export type SmsCountry = 'IN' | 'AE' | 'US'
 export type SenderKind = 'promotional' | 'service' | 'transactional' | 'long_code' | 'toll_free' | 'short_code'
 
 export interface DltConfig {
@@ -12,6 +12,9 @@ export interface DltConfig {
   us_campaign_id: string | null
   attested_at: string | null
   attested_by_name: string | null
+  /** UAE: "UAE-licensed and consents uploaded to TDRA's Consent Management System". */
+  uae_attested_at?: string | null
+  uae_attested_by_name?: string | null
 }
 
 export interface SmsSender {
@@ -101,7 +104,7 @@ export interface SmsReadiness {
   estimate: Estimate | null
   message: MessageShape
   cost: { unit_price: number; currency: string; total: number }
-  country: 'IN' | 'US' | null
+  country: SmsCountry | null
   sender_chosen: boolean
   wallet: WalletInfo
   quiet_hours: QuietWait
@@ -160,8 +163,16 @@ export interface SmsOverview {
   recent: SmsCampaignListItem[]
   upcoming: SmsCampaignListItem[]
   senders: Record<string, number>
-  registration: { india: boolean; us: boolean }
-  setup: { consented: { IN: number; US: number }; dlt_templates: number; default_country: 'IN' | 'US' | null }
+  registration: { india: boolean; us: boolean; uae?: boolean }
+  setup: {
+    consented: { IN: number; AE?: number; US: number }
+    dlt_templates: number
+    default_country: SmsCountry | null
+    /** UAE while SMS_UAE_ENABLED is off: why SMS is "coming soon". */
+    coming_soon?: string | null
+    market_rules?: string[]
+    uae_attested?: boolean
+  }
 }
 
 export interface SmsInboundItem {

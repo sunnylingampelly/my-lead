@@ -11,7 +11,9 @@ import { CommandPalette } from './CommandPalette'
 import { ShortcutsDialog, useGlobalShortcuts } from './Shortcuts'
 import { Sidebar } from './Sidebar'
 import { SupportBanner } from './SupportBanner'
+import { MfaBanner } from './MfaBanner'
 import { Topbar } from './Topbar'
+import { AssistantPanel } from '@/modules/ai/AssistantPanel'
 
 const COLLAPSE_KEY = 'sc-sidebar-collapsed'
 
@@ -90,6 +92,7 @@ function Shell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onMenu={() => setMobileNav(true)} onSearch={() => setPalette(true)} onShortcuts={() => setHelp(true)} />
         <SupportBanner />
+        <MfaBanner />
         <main id="main" className={cn('mx-auto w-full flex-1', fullBleed ? 'p-0' : cn(!wide && 'max-w-[1400px]', 'px-4 py-6 sm:px-8 sm:py-8'))}>
           {loading ? (
             <FullPageSpinner />
@@ -113,6 +116,7 @@ function Shell() {
         </main>
       </div>
       <CommandPalette open={palette} onOpenChange={setPalette} onShortcuts={() => setHelp(true)} />
+      <AssistantPanel />
       <ShortcutsDialog open={help} onOpenChange={setHelp} />
     </div>
   )

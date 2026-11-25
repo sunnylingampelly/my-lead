@@ -32,10 +32,11 @@ test('Audience ↔ CRM: inline create in pickers, bulk assign on leads, quick ac
   if (!/contacts\/[0-9a-f-]{36}/.test(page.url())) await page.getByRole('link', { name: /Ravi/ }).first().click()
   await expect(page.getByRole('heading', { name: /Ravi/ }).first()).toBeVisible()
 
-  // Quick actions on the profile: email is reachable, SMS explains why not.
+  // Quick actions on the profile: email is reachable, calls explain why not; SMS is coming soon (no action).
   const qa = page.getByTestId('quick-actions')
   await expect(qa.getByRole('link', { name: 'Send email' })).toHaveAttribute('href', new RegExp(`/email/campaigns/new\\?contact_ids=`))
-  await expect(qa.getByRole('button', { name: 'Send SMS' })).toBeDisabled()
+  await expect(qa.getByRole('button', { name: 'Send SMS' })).toHaveCount(0)
+  await expect(qa.getByRole('link', { name: 'Send SMS' })).toHaveCount(0)
   await expect(qa).toContainText('No phone number')
   await qa.getByRole('button', { name: 'Add task' }).click()
   await page.getByRole('dialog').getByLabel('Task').fill('Call Ravi back')

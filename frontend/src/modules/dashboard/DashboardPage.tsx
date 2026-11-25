@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   Activity,
@@ -29,7 +29,8 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { cn, timeAgo } from '@/lib/utils'
 import { describeAction } from '@/modules/organizations/auditLabels'
 import { StatCard } from '@/components/audience'
-import { GrowthChart } from '@/modules/audience/GrowthChart'
+// The chart library (recharts, ~420 kB) loads after the dashboard itself has rendered.
+const GrowthChart = lazy(() => import('@/modules/audience/GrowthChart').then((m) => ({ default: m.GrowthChart })))
 import { formatCount } from '@/lib/regions'
 import type { ChecklistItem, DashboardData } from '@/types/api'
 import { CHECKLIST_ANCHOR, setChecklistHidden, useChecklistHidden } from './checklistState'
@@ -119,6 +120,22 @@ function Channels({ appId, data, country }: { appId: string; data: DashboardData
       <CardContent className="grid gap-3 sm:grid-cols-2">
         {CHANNELS.map((c) => {
           const ch = data.channels[c.key]
+          // SMS is coming soon in every market: a plain card, nothing to click into.
+          if (c.key === 'sms' || ch.coming_soon)
+            return (
+              <div key={c.key} className="flex items-start gap-3 rounded-lg border border-dashed bg-muted/20 p-4" data-testid={`channel-${c.key}`}>
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground shadow-card">
+                  <c.icon className="size-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-muted-foreground">{c.label}</span>
+                    <Badge variant="secondary">Coming soon</Badge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Text messaging with carrier registration built in is on its way.</p>
+                </div>
+              </div>
+            )
           return (
             <div key={c.key} className="relative rounded-lg border bg-muted/30 transition-colors hover:border-primary/40 hover:bg-muted/50" data-testid={`channel-${c.key}`}>
               <Link to={`/apps/${appId}/${c.path}`} className="flex items-start gap-3 p-4 pb-3">
@@ -252,7 +269,7 @@ export function DashboardPage() {
                 <StatCard label="Total contacts" value={formatCount(q.data.audience.total, app!.default_country)} icon={UsersRound} hint={`+${formatCount(q.data.audience.new_last_7_days, app!.default_country)} in 7 days`} />
                 <StatCard label="Active contacts" value={formatCount(q.data.audience.active, app!.default_country)} icon={Users} tone="success" />
                 <StatCard label="Reachable by email" value={formatCount(q.data.audience.reachable.email, app!.default_country)} icon={Mail} hint="Consented and not suppressed" />
-                <StatCard label="Reachable by SMS" value={formatCount(q.data.audience.reachable.sms, app!.default_country)} icon={MessageSquare} hint="Consented and not suppressed" />
+                <StatCard label="Reachable by calls" value={formatCount(q.data.audience.reachable.voice ?? 0, app!.default_country)} icon={PhoneCall} hint="Consented and not suppressed" />
               </div>
             )}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -265,7 +282,9 @@ export function DashboardPage() {
                       <CardDescription>Total contacts over the last 30 days.</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <GrowthChart data={q.data.audience.growth} country={app!.default_country} height={180} />
+                      <Suspense fallback={<div className="h-[180px] animate-pulse rounded-md bg-muted" />}>
+                        <GrowthChart data={q.data.audience.growth} country={app!.default_country} height={180} />
+                      </Suspense>
                     </CardContent>
                   </Card>
                 )}

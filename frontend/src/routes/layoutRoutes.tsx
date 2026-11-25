@@ -4,7 +4,7 @@ import { ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/hooks/useAuth'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { AdminPage } from '@/modules/admin/AdminPage'
+import { AdminPage } from './pages'
 
 /** /admin for someone without a platform role: say why instead of silently redirecting. */
 export function AdminGuard() {

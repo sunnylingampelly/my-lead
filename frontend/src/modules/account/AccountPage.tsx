@@ -17,6 +17,7 @@ import { useAuth, useUser } from '@/hooks/useAuth'
 import { applyServerErrors, passwordSchema } from '@/lib/forms'
 import { timeAgo } from '@/lib/utils'
 import { TIMEZONES } from '@/lib/timezones'
+import { TwoFactorCard } from './TwoFactorCard'
 
 const profileSchema = z.object({ full_name: z.string().trim().min(1, 'Required').max(150), timezone: z.string() })
 const pwSchema = z
@@ -84,6 +85,8 @@ export function AccountPage() {
             </CardFooter>
           </Card>
         </form>
+
+        <TwoFactorCard />
 
         <form
           noValidate

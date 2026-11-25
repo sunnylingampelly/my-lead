@@ -10,7 +10,6 @@ import {
   Clock,
   Copy,
   FileText,
-  Globe,
   LayoutTemplate,
   Mail,
   MailCheck,
@@ -29,7 +28,7 @@ import { emailApi, eqk, useCampaigns, useEmailOverview, useSenders, useTemplates
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Field, Input } from '@/components/ui/form-controls'
@@ -38,6 +37,7 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Pagination, StatCard } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
+import { DomainAuthCard } from './DomainAuthCard'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
 import type { CampaignListItem, EmailTemplate, Sender } from '@/types/email'
 import { NewCampaignButton } from './CampaignEditorPage'
@@ -631,7 +631,6 @@ export function SendersPage() {
   const { app, can } = useWorkspace()
   const q = useSenders(app!.id, true)
   const [open, setOpen] = useState(false)
-  const domain = q.data?.find((s) => s.status === 'verified')?.domain ?? 'yourdomain.com'
   return (
     <>
       <BackToCampaignBanner />
@@ -661,31 +660,7 @@ export function SendersPage() {
             </ul>
           )}
         </Card>
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Globe className="size-4" /> Domain authentication
-            </CardTitle>
-            <CardDescription>Gmail and Yahoo require these for bulk senders. Add them at your DNS provider for {domain}.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-xs">
-            {[
-              ['SPF', 'TXT', domain, 'v=spf1 include:amazonses.com ~all'],
-              ['DKIM', 'CNAME', `selector._domainkey.${domain}`, 'Provided by SES or Brevo when you add the domain'],
-              ['DMARC', 'TXT', `_dmarc.${domain}`, 'v=DMARC1; p=none; rua=mailto:dmarc@' + domain],
-            ].map(([name, type, host, value]) => (
-              <div key={name} className="rounded-md border p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold">{name}</span>
-                  <Badge variant="secondary">{type}</Badge>
-                </div>
-                <div className="mt-1 break-all font-mono text-muted-foreground">{host}</div>
-                <div className="mt-0.5 break-all font-mono">{value}</div>
-              </div>
-            ))}
-            <p className="text-muted-foreground">These are guidance only. Domain records are checked by the email provider when live sending is enabled.</p>
-          </CardContent>
-        </Card>
+        <DomainAuthCard appId={app!.id} senders={q.data ?? []} />
       </div>
       <AddSenderDialog open={open} onOpenChange={setOpen} />
     </>

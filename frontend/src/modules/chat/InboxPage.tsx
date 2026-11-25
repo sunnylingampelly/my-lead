@@ -341,6 +341,7 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
             <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); send() }}>
               <Textarea
                 aria-label={note ? 'Internal note' : 'Reply'}
+                dir="auto"
                 rows={2}
                 maxLength={4000}
                 value={text}
@@ -376,13 +377,13 @@ function MessageRow({ m, canTrain, onImprove }: { m: InboxMessage; canTrain: boo
     return (
       <div className="mx-auto max-w-[90%] rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-sm text-warning-strong">
         <p className="mb-0.5 flex items-center gap-1 text-[11px] font-semibold"><Lock className="size-3" /> {m.author?.full_name ?? 'Note'} · internal</p>
-        <p className="whitespace-pre-wrap">{m.body}</p>
+        <p dir="auto" className="whitespace-pre-wrap">{m.body}</p>
       </div>
     )
   const visitor = m.role === 'visitor'
   return (
     <div className={cn('flex flex-col', visitor ? 'items-start' : 'items-end')}>
-      <div className={cn('max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm', visitor ? 'rounded-bl-sm bg-card ring-1 ring-border' : m.role === 'bot' ? 'rounded-br-sm bg-accent' : 'rounded-br-sm bg-primary text-primary-foreground')}>
+      <div dir="auto" className={cn('max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm', visitor ? 'rounded-bl-sm bg-card ring-1 ring-border' : m.role === 'bot' ? 'rounded-br-sm bg-accent' : 'rounded-br-sm bg-primary text-primary-foreground')}>
         {m.body}
       </div>
       <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">

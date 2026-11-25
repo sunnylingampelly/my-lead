@@ -3,7 +3,7 @@ import type { QuietWait } from './sms'
 
 export type VoiceCategory = 'promotional' | 'transactional' | 'service'
 export type CallerKind = 'series_140' | 'series_160' | 'local' | 'toll_free'
-export type VoiceLanguage = 'en-IN' | 'hi-IN' | 'ta-IN' | 'te-IN' | 'en-US' | 'es-US'
+export type VoiceLanguage = 'en-IN' | 'hi-IN' | 'ta-IN' | 'te-IN' | 'en-US' | 'es-US' | 'ar-AE'
 export type VoiceMessageType = 'audio' | 'tts' | 'ai_agent'
 
 export type OutcomeFieldType = 'text' | 'yes_no' | 'number' | 'date' | 'choice'
@@ -169,7 +169,7 @@ export interface VoiceReadiness {
   cost: { per_minute: number; currency: string; minutes_per_call: number; total: number; ai?: boolean }
   /** Legal window for the market (kept for older clients); prefer calling_hours. */
   window: [string, string]
-  country: 'IN' | 'US' | null
+  country: 'IN' | 'AE' | 'US' | null
   caller_chosen: boolean
   calling_hours: QuietWait
   wallet: WalletInfo
@@ -241,7 +241,14 @@ export interface VoiceOverview {
   upcoming: VoiceCampaignListItem[]
   agents?: Record<string, number>
   audio_count: number
-  setup: { default_country: 'IN' | 'US' | null; dlt_registered: boolean; consented: number }
+  setup: {
+    default_country: 'IN' | 'AE' | 'US' | null
+    dlt_registered: boolean
+    consented: number
+    /** UAE while VOICE_UAE_ENABLED is off: why calls are "coming soon", and the rules that will apply. */
+    coming_soon?: string | null
+    market_rules?: string[]
+  }
 }
 
 export interface VoiceOptions {

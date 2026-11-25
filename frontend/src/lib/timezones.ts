@@ -19,7 +19,7 @@ export const TIMEZONES: string[] = (() => {
   } catch {
     /* older browsers */
   }
-  return ['UTC', 'Asia/Kolkata', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Singapore']
+  return ['UTC', 'Asia/Kolkata', 'Asia/Dubai', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Singapore']
 })()
 
 /** The viewer's timezone with legacy names normalised (Asia/Calcutta → Asia/Kolkata). */

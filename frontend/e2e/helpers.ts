@@ -39,7 +39,7 @@ export async function registerAndVerify(page: Page, name: string, email: string)
   await page.getByRole('link', { name: 'Continue setup' }).click()
 }
 
-export async function createOrgAndApp(page: Page, orgName: string, appName: string, market: 'IN' | 'US' = 'IN') {
+export async function createOrgAndApp(page: Page, orgName: string, appName: string, market: 'IN' | 'AE' | 'US' = 'IN') {
   await expect(page.getByRole('heading', { name: 'Set up your organization' })).toBeVisible()
   await page.getByLabel('Organization name').fill(orgName)
   await page.getByLabel('Primary market').selectOption(market)

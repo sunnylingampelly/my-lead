@@ -56,8 +56,8 @@ test('India voice: managed numbers, audio library, campaign, outcomes, call log,
   await page.getByRole('button', { name: 'Save settings' }).click()
   await expect(page.getByRole('button', { name: 'Save settings' })).toBeDisabled()
 
-  // India requires a DLT entity registration.
-  await navTo(page, 'DLT & 10DLC')
+  // India requires a DLT entity registration (shared by voice; SMS itself is coming soon).
+  await page.goto(`/apps/${page.url().match(/\/apps\/([^/?#]+)/)![1]}/voice/registration`)
   await page.getByLabel('Principal Entity ID').fill('1101456789012345678')
   await page.getByRole('checkbox', { name: 'Confirm registration' }).check()
   await page.getByRole('button', { name: 'Save registration' }).click()

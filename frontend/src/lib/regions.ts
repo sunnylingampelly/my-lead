@@ -1,4 +1,4 @@
-/** Countries offered in pickers. India and the United States are the primary markets and come first. */
+/** Countries offered in pickers. India, the UAE and the United States are the primary markets and come first. */
 export interface Country {
   code: string
   name: string
@@ -8,11 +8,21 @@ export interface Country {
 
 export const PRIMARY_COUNTRIES: Country[] = [
   { code: 'IN', name: 'India', dial: '+91', flag: '🇮🇳' },
+  { code: 'AE', name: 'United Arab Emirates', dial: '+971', flag: '🇦🇪' },
   { code: 'US', name: 'United States', dial: '+1', flag: '🇺🇸' },
 ]
 
+/** Wallet currency per primary market (default time zones: COUNTRY_DEFAULT_TIMEZONE in lib/timezones). */
+export const MARKET_CURRENCY: Record<string, string> = { IN: 'INR', AE: 'AED', US: 'USD' }
+
+/** Number-format locale for a currency: Indian grouping for INR, en-AE for AED, en-US otherwise. */
+export const currencyLocale = (currency?: string | null) =>
+  currency === 'INR' ? 'en-IN' : currency === 'AED' ? 'en-AE' : 'en-US'
+
+/** The seven emirates (billing address of UAE organizations). */
+export const EMIRATES = ['Abu Dhabi', 'Dubai', 'Sharjah', 'Ajman', 'Umm Al Quwain', 'Ras Al Khaimah', 'Fujairah']
+
 export const OTHER_COUNTRIES: Country[] = [
-  { code: 'AE', name: 'United Arab Emirates', dial: '+971', flag: '🇦🇪' },
   { code: 'AU', name: 'Australia', dial: '+61', flag: '🇦🇺' },
   { code: 'BD', name: 'Bangladesh', dial: '+880', flag: '🇧🇩' },
   { code: 'CA', name: 'Canada', dial: '+1', flag: '🇨🇦' },
@@ -59,6 +69,7 @@ export function browserCountry(): string | null {
   }
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   if (tz === 'Asia/Kolkata' || tz === 'Asia/Calcutta') return 'IN'
+  if (tz === 'Asia/Dubai') return 'AE'
   if (tz?.startsWith('America/')) return 'US'
   return null
 }
@@ -90,10 +101,12 @@ export function formatCount(n: number, country?: string | null) {
   return new Intl.NumberFormat(country === 'IN' ? 'en-IN' : 'en-US').format(n)
 }
 
-/** Readable E.164 for India and US numbers; other numbers are returned unchanged. */
+/** Readable E.164 for India, UAE and US numbers; other numbers are returned unchanged. */
 export function formatPhone(e164: string) {
   let m = /^\+91(\d{5})(\d{5})$/.exec(e164)
   if (m) return `+91 ${m[1]} ${m[2]}`
+  m = /^\+971(5\d)(\d{3})(\d{4})$/.exec(e164)
+  if (m) return `+971 ${m[1]} ${m[2]} ${m[3]}`
   m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164)
   if (m) return `+1 ${m[1]}-${m[2]}-${m[3]}`
   return e164

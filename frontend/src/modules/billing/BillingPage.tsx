@@ -4,7 +4,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts'
 import { CalendarClock, Check, CheckCircle2, CreditCard, Download, FlaskConical, Loader2, Lock, Plus, Sparkles, TrendingDown, TriangleAlert, Undo2, Wallet } from 'lucide-react'
-import { billingApi, type BillingScope, bqk, type PlanKey, useBilling, usePlan, useTransactions } from '@/api/billing'
+import { billingApi, type BillingScope, bqk, type PlanKey, useBilling, useBillingProfile, usePlan, useTransactions } from '@/api/billing'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { BillingDetailsCard, GstBreakdown, InvoicesCard, StatementsCard } from './TaxDocuments'
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
@@ -19,6 +21,7 @@ import { downloadFile } from '@/lib/download'
 import { cn, formatDateTime } from '@/lib/utils'
 import { formatMoney } from '../sms/format'
 import { CountryFlag } from '@/components/CountryFlag'
+import { countryName } from '@/lib/regions'
 
 const TYPE_LABEL: Record<string, string> = {
   trial_credit: 'Trial credit',
@@ -35,7 +38,12 @@ const LIMIT_LABEL: Record<string, string> = {
   applications: 'Applications',
   members: 'Team members',
   contacts: 'Contacts',
-  voice_agents: 'AI agents',
+  voice_agents: 'AI calling agents',
+  lead_forms: 'Lead forms',
+  chatbots: 'Website chatbots',
+  chat_seats: 'Live-chat agents',
+  ai_assistant_messages_per_day: 'AI Assistant messages today',
+  ai_agent_runs_per_day: 'AI agent runs today',
 }
 const formatDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 
@@ -160,8 +168,12 @@ function PlanSection({ orgId, onAddCredit }: { orgId: string; onAddCredit: (() =
                       <p className="text-sm text-muted-foreground">{c.tagline}</p>
                     </div>
                     <div className="shrink-0 text-right">
-                      <div className="text-xl font-semibold tabular-nums">{c.price ? formatMoney(c.price, cur) : 'Free'}</div>
-                      {c.price > 0 && <div className="text-xs text-muted-foreground">per month</div>}
+                      <div className="text-xl font-semibold tabular-nums" data-testid={`plan-price-${c.key}`}>
+                        {c.price ? formatMoney(c.price, cur) : 'Free'}
+                        {c.price > 0 && <span className="text-sm font-normal text-muted-foreground">/month{cur === 'INR' ? ' + GST' : ''}</span>}
+                      </div>
+                      {c.price > 0 && cur === 'INR' && <div className="text-xs text-muted-foreground">GST is charged when you add credit</div>}
+                      {c.price > 0 && cur === 'AED' && <div className="text-xs text-muted-foreground">No UAE VAT charged (reverse charge)</div>}
                     </div>
                   </div>
                   <ul className="mt-3 flex-1 space-y-1.5 text-sm">
@@ -239,7 +251,7 @@ const CHANNEL_LABEL: Record<string, string> = { email: 'Email', sms: 'SMS', voic
 
 function TopUpDialog({ scope, currency, open, onOpenChange }: { scope: BillingScope; currency: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const qc = useQueryClient()
-  const presets = currency === 'INR' ? [500, 2000, 10000] : [10, 50, 200]
+  const presets = currency === 'INR' ? [500, 2000, 10000] : currency === 'AED' ? [50, 200, 700] : [10, 50, 200]
   const [amount, setAmount] = useState(String(presets[1]))
   const [busy, setBusy] = useState(false)
   return (
@@ -399,11 +411,15 @@ function Transactions({ scope, currency, appName }: { scope: BillingScope; curre
   )
 }
 
-function PayDialog({ scope, currency, min, max, provider, open, onOpenChange }: { scope: BillingScope; currency: string; min: number; max: number; provider: string; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const presets = currency === 'INR' ? [1000, 5000, 20000] : [25, 100, 500]
+function PayDialog({ scope, currency, min, max, provider, open, onOpenChange, onNeedDetails }: { scope: BillingScope; currency: string; min: number; max: number; provider: string; open: boolean; onOpenChange: (o: boolean) => void; onNeedDetails: () => void }) {
+  const presets = currency === 'INR' ? [1000, 5000, 20000] : currency === 'AED' ? [100, 500, 2000] : [25, 100, 500]
   const [amount, setAmount] = useState(String(presets[1]))
   const [busy, setBusy] = useState(false)
   const n = Number(amount)
+  const orgId = scope.kind === 'org' ? scope.id : scope.orgId
+  const profile = useBillingProfile(orgId, open)
+  // AED: only VAT-registered UAE businesses can pay, so a TRN is required too.
+  const needsDetails = !!profile.data?.required && (!profile.data.profile || (!!profile.data.trn_required && !profile.data.profile.trn))
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -421,13 +437,23 @@ function PayDialog({ scope, currency, min, max, provider, open, onOpenChange }: 
         <Field label={`Amount (${currency})`} htmlFor="pay-amount" hint={`Between ${formatMoney(min, currency)} and ${formatMoney(max, currency)}.`}>
           <Input id="pay-amount" type="number" min={min} max={max} value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
+        {n >= min && n <= max && (
+          <GstBreakdown
+            orgId={orgId}
+            amount={n}
+            onNeedDetails={() => {
+              onOpenChange(false)
+              onNeedDetails()
+            }}
+          />
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
             loading={busy}
-            disabled={!(n >= min && n <= max)}
+            disabled={!(n >= min && n <= max) || needsDetails || profile.isLoading}
             onClick={async () => {
               setBusy(true)
               try {
@@ -468,7 +494,7 @@ function PaymentStatus({ scope, id, currency }: { scope: BillingScope; id: strin
       {p.status === 'paid'
         ? `${formatMoney(p.amount, currency)} was added to your wallet.`
         : p.status === 'pending'
-          ? `Waiting for the payment of ${formatMoney(p.amount, currency)} to be confirmed…`
+          ? `Waiting for the payment of ${formatMoney(p.gross_amount ?? p.amount, currency)} to be confirmed…`
           : `The payment was not completed${p.failure_reason ? `: ${p.failure_reason}` : ''}. No credit was added.`}
     </div>
   )
@@ -501,6 +527,23 @@ export function BillingPage() {
   const [threshold, setThreshold] = useState(false)
   const s = q.data
   const cur = s?.currency ?? 'USD'
+  // ?tab=invoices|statements|details opens a tab (the invoice email links to Invoices).
+  const tab = ['invoices', 'statements', 'details'].includes(params.get('tab') ?? '') ? params.get('tab')! : 'transactions'
+  const setTab = (t: string) => {
+    const next = new URLSearchParams(params)
+    if (t === 'transactions') next.delete('tab')
+    else next.set('tab', t)
+    setParams(next, { replace: true })
+  }
+  const openDetails = () => {
+    setTab('details')
+    window.setTimeout(() => document.getElementById('billing-tabs')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50)
+  }
+  // INR wallets need billing details (for GST invoices) before the first online top-up; AED wallets need them
+  // with a TRN (UAE VAT-registered businesses only). The billing details tab shows the TRN even in test mode.
+  const uaeWallet = s?.currency === 'AED'
+  const profile = useBillingProfile(orgKey, !!s && (uaeWallet || (!s.test_mode && s.currency === 'INR')) && s.can_manage)
+  const needsDetails = !!profile.data?.required && (!profile.data.profile || (uaeWallet && !profile.data.profile.trn))
   // ?topup=1 (from "Add credit" on an out-of-credit toast or the low-balance chip) opens the right dialog.
   useEffect(() => {
     if (!wantsTopUp || !s) return
@@ -540,6 +583,25 @@ export function BillingPage() {
       ) : (
         <div className="space-y-6">
           {paymentId && <PaymentStatus scope={scope} id={paymentId} currency={cur} />}
+          {needsDetails && (
+            <div className="flex flex-col gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm text-warning-strong sm:flex-row sm:items-center" data-testid="billing-details-prompt">
+              <TriangleAlert className="hidden size-4 shrink-0 sm:block" />
+              <div className="min-w-0 flex-1">
+                {uaeWallet ? (
+                  <>
+                    <strong>Add your UAE TRN before your first top-up.</strong> Signalcraft currently sells to VAT-registered UAE businesses. Invoices show your TRN and charge no UAE VAT (reverse charge).
+                  </>
+                ) : (
+                  <>
+                    <strong>Add your billing details before your first top-up.</strong> Prices exclude GST; GST is added to each top-up and we email you a tax invoice made out to these details.
+                  </>
+                )}
+              </div>
+              <Button size="sm" variant="outline" onClick={openDetails}>
+                {uaeWallet ? 'Add your TRN' : 'Add billing details'}
+              </Button>
+            </div>
+          )}
           <PlanSection orgId={orgKey} onAddCredit={!s.can_manage ? null : s.test_mode ? () => setTopUp(true) : options.data?.provider ? () => setPay(true) : null} />
           {wantsTopUp && !s.can_manage && (
             <p className="rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm text-warning-strong">Only owners and admins can add credit. Ask one of them to top up the wallet.</p>
@@ -664,12 +726,13 @@ export function BillingPage() {
                   <TR key={p.country}>
                     <TD>
                       <span className="inline-flex items-center gap-2">
-                        <CountryFlag code={p.country} /> {p.country === 'IN' ? 'India' : 'United States'}
+                        <CountryFlag code={p.country} /> {countryName(p.country)}
                       </span>
                     </TD>
                     <TD className="text-right tabular-nums">{formatMoney(p.email, cur)}</TD>
-                    <TD className="text-right tabular-nums">{formatMoney(p.sms_promotional, cur)}</TD>
-                    <TD className="text-right tabular-nums">{formatMoney(p.sms_transactional, cur)}</TD>
+                    {/* SMS is coming soon in every market. */}
+                    <TD className="text-right text-muted-foreground">Coming soon</TD>
+                    <TD className="text-right text-muted-foreground">Coming soon</TD>
                     <TD className="text-right tabular-nums">{formatMoney(p.voice_minute, cur)}</TD>
                     <TD className="text-right tabular-nums">{p.chat_reply != null ? formatMoney(p.chat_reply, cur) : '—'}</TD>
                   </TR>
@@ -677,9 +740,32 @@ export function BillingPage() {
               </TBody>
             </Table>
           </Card>
-          <Transactions scope={view} currency={cur} appName={filteredApp?.name} />
+          <Tabs value={tab} onValueChange={setTab} id="billing-tabs" className="scroll-mt-20">
+            <div className="-mx-1 overflow-x-auto px-1">
+              <TabsList>
+                <TabsTrigger value="transactions">Transactions</TabsTrigger>
+                <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
+                <TabsTrigger value="statements" data-testid="tab-statements">Statements</TabsTrigger>
+                <TabsTrigger value="details" data-testid="tab-billing-details">Billing details</TabsTrigger>
+              </TabsList>
+            </div>
+            <TabsContent value="transactions">
+              <Transactions scope={view} currency={cur} appName={filteredApp?.name} />
+            </TabsContent>
+            <TabsContent value="invoices">
+              <InvoicesCard orgId={orgKey} />
+            </TabsContent>
+            <TabsContent value="statements">
+              <StatementsCard orgId={orgKey} />
+            </TabsContent>
+            <TabsContent value="details">
+              <BillingDetailsCard orgId={orgKey} />
+            </TabsContent>
+          </Tabs>
           <TopUpDialog scope={scope} currency={cur} open={topUp} onOpenChange={setTopUp} />
-          {options.data?.provider && <PayDialog scope={scope} currency={cur} min={options.data.min} max={options.data.max} provider={options.data.provider} open={pay} onOpenChange={setPay} />}
+          {options.data?.provider && (
+            <PayDialog scope={scope} currency={cur} min={options.data.min} max={options.data.max} provider={options.data.provider} open={pay} onOpenChange={setPay} onNeedDetails={openDetails} />
+          )}
           {threshold && <ThresholdDialog scope={scope} currency={cur} value={s.low_balance_threshold} open={threshold} onOpenChange={setThreshold} />}
         </div>
       )}
