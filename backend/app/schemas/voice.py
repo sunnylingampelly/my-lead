@@ -8,7 +8,7 @@ from app.schemas.common import ORMModel
 from app.schemas.email import Audience
 
 Category = Literal["promotional", "transactional", "service"]
-Language = Literal["en-IN", "hi-IN", "ta-IN", "te-IN", "en-US", "es-US"]
+Language = Literal["en-IN", "hi-IN", "ta-IN", "te-IN", "en-US", "es-US", "ar-AE"]
 MessageType = Literal["audio", "tts", "ai_agent"]
 
 

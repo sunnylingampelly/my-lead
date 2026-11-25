@@ -106,7 +106,15 @@ def issue_session(db: Session, user: User, *, family_id: str | None, user_agent:
     return IssuedTokens(user=user, access_token=access, expires_in=ttl, refresh_token=refresh, session=session)
 
 
-def login(db: Session, *, email: str, password: str, user_agent: str | None, ip: str | None) -> IssuedTokens:
+@dataclass
+class MfaChallenge:
+    """Password accepted, second factor still needed. No session exists yet."""
+    user: User
+    token: str
+
+
+def login(db: Session, *, email: str, password: str, user_agent: str | None,
+          ip: str | None) -> IssuedTokens | MfaChallenge:
     user = get_user_by_email(db, email)
     if user is None:
         verify_password(password, DUMMY_PASSWORD_HASH)  # equalise timing
@@ -120,10 +128,26 @@ def login(db: Session, *, email: str, password: str, user_agent: str | None, ip:
         raise Forbidden("This account has been suspended", code="ACCOUNT_SUSPENDED")
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
+    if user.mfa_enabled:
+        from app.services import mfa_service
+
+        return MfaChallenge(user=user, token=mfa_service.create_challenge(db, user, ip))
     user.last_login_at = utcnow()
     issued = issue_session(db, user, family_id=None, user_agent=user_agent, ip=ip)
     audit_service.record(db, "user.login", actor_user_id=user.id, target_type="user", target_id=user.id,
                          ip_address=ip)
+    return issued
+
+
+def complete_mfa_login(db: Session, *, token: str, code: str, user_agent: str | None, ip: str | None) -> IssuedTokens:
+    """Second login step: a valid challenge token plus a TOTP or recovery code opens the session."""
+    from app.services import mfa_service
+
+    user, method = mfa_service.verify_challenge(db, token, code, ip=ip)
+    user.last_login_at = utcnow()
+    issued = issue_session(db, user, family_id=None, user_agent=user_agent, ip=ip)
+    audit_service.record(db, "user.login", actor_user_id=user.id, target_type="user", target_id=user.id,
+                         ip_address=ip, meta={"mfa": method})
     return issued
 
 
@@ -137,6 +161,21 @@ def refresh(db: Session, *, refresh_token: str, user_agent: str | None, ip: str 
         raise Unauthorized("Session expired. Please sign in again.", code="INVALID_REFRESH_TOKEN")
     now = utcnow()
     if session.revoked_at is not None:
+        # Lost response: the browser sent this token, we rotated it, but the reply never arrived (a reload or
+        # navigation aborted the request), so the browser still holds the old token. Within a short grace
+        # window, and only while the successor has never been used, accept it once more: retire the unused
+        # successor and issue a new one. A successor that was already used means the token was copied.
+        successor = db.get(UserSession, session.replaced_by_id) if session.replaced_by_id else None
+        grace = timedelta(seconds=settings.REFRESH_REUSE_GRACE_SECONDS)
+        if (session.revoked_reason == "rotated" and session.revoked_at >= now - grace and successor is not None
+                and successor.revoked_at is None and not _session_used(successor) and session.expires_at >= now):
+            user = db.get(User, session.user_id)
+            if user is not None and user.is_active and user.deleted_at is None:
+                issued = issue_session(db, user, family_id=session.family_id, user_agent=user_agent, ip=ip)
+                successor.revoked_at, successor.revoked_reason = now, "superseded"
+                successor.replaced_by_id = issued.session.id
+                session.replaced_by_id = issued.session.id
+                return issued
         if session.revoked_reason == "rotated":
             revoke_family(db, session.user_id, session.family_id, reason="reuse_detected")
             audit_service.record(db, "user.refresh_token_reuse", actor_user_id=session.user_id,
@@ -182,9 +221,19 @@ def logout(db: Session, *, session_id: str | None, refresh_token: str | None) ->
 
 def get_active_session(db: Session, session_id: str) -> UserSession | None:
     s = db.get(UserSession, session_id)
-    if s is None or s.revoked_at is not None or s.expires_at < utcnow():
+    now = utcnow()
+    if s is None or s.revoked_at is not None or s.expires_at < now:
         return None
+    # Record the first use of a session's access token (one write per session, then every 5 minutes). Refresh
+    # relies on it: a session that has been used was delivered, so replaying its predecessor is theft.
+    if s.last_used_at is None or s.last_used_at <= s.created_at or s.last_used_at < now - timedelta(minutes=5):
+        s.last_used_at = now
+        db.commit()
     return s
+
+
+def _session_used(s: UserSession) -> bool:
+    return s.last_used_at is not None and s.last_used_at > s.created_at
 
 
 def was_rotated(db: Session, session_id: str, user_id: str) -> bool:

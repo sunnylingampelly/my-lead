@@ -97,6 +97,50 @@ def test_rotation_by_another_tab_asks_to_refresh_not_sign_out():
     assert a.post("/auth/refresh").status_code == 401
 
 
+def test_lost_refresh_response_is_forgiven_once_but_reuse_after_use_is_theft(monkeypatch):
+    """A reload can abort a refresh after the server rotated the token: the browser still holds the old one.
+    Within the grace window, while the successor was never used, the old token works once more. Once the
+    successor has been used (or the window passed), presenting the old token is treated as theft."""
+    from datetime import timedelta
+
+    from sqlalchemy import select, update
+
+    from app.core.database import SessionLocal
+    from app.models import UserSession
+    from app.utils.time import utcnow
+
+    a = Api().register("lost@example.com")
+    old = a.client.cookies.get("sc_refresh")
+    assert a.post("/auth/refresh").status_code == 200  # rotated; pretend the browser never saw the reply
+    lost = Api()
+    lost.client.cookies.set("sc_refresh", old, path="/api/v1/auth")
+    r = lost.post("/auth/refresh")
+    assert r.status_code == 200, r.text  # forgiven: the successor was never used
+    lost.token = r.json()["access_token"]
+    assert lost.get("/users/me").status_code == 200
+    # The undelivered successor (the cookie `a` received) is retired, so only one live token remains.
+    assert a.post("/auth/refresh").status_code == 401
+
+    # Now the old token again: its new successor has been used, so this is theft and the family is revoked.
+    thief = Api()
+    thief.client.cookies.set("sc_refresh", old, path="/api/v1/auth")
+    assert thief.post("/auth/refresh").status_code == 401
+    assert lost.get("/users/me").json()["error"]["code"] == "SESSION_REVOKED"
+
+    # Outside the grace window an unused successor doesn't help either.
+    b = Api().register("late@example.com")
+    old_b = b.client.cookies.get("sc_refresh")
+    assert b.post("/auth/refresh").status_code == 200
+    with SessionLocal() as db:
+        s = db.scalar(select(UserSession).where(UserSession.revoked_reason == "rotated",
+                                                UserSession.user.has(email="late@example.com")))
+        db.execute(update(UserSession).where(UserSession.id == s.id).values(revoked_at=utcnow() - timedelta(minutes=5)))
+        db.commit()
+    late = Api()
+    late.client.cookies.set("sc_refresh", old_b, path="/api/v1/auth")
+    assert late.post("/auth/refresh").status_code == 401
+
+
 def test_logout_revokes_access_and_refresh():
     a = Api().register("out@example.com")
     assert a.post("/auth/logout").status_code == 200

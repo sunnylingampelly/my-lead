@@ -7,7 +7,7 @@ from app.core.permissions import Perm
 from app.models import User
 from app.models.sms import SmsCampaign, SmsDltConfiguration, SmsSender, SmsTemplate
 from app.schemas.sms import DltConfigIn, DltConfigOut, SenderIn, TemplateIn, TemplateOut, TemplateUpdate
-from app.services import audit_service
+from app.services import audit_service, uae
 from app.services.email import render
 from app.services.sms import rules
 from app.services.tenancy import AppContext
@@ -23,11 +23,14 @@ def dlt_row(db: Session, application_id: str) -> SmsDltConfiguration | None:
 def dlt_out(db: Session, row: SmsDltConfiguration | None) -> DltConfigOut:
     if row is None:
         return DltConfigOut(principal_entity_id=None, entity_name=None, dlt_platform=None, us_brand_id=None,
-                            us_campaign_id=None, attested_at=None)
+                            us_campaign_id=None, attested_at=None, uae_attested_at=None)
     out = DltConfigOut.model_validate(row)
     if row.attested_by_id:
         u = db.get(User, row.attested_by_id)
         out.attested_by_name = (u.full_name or u.email) if u else None
+    if row.uae_attested_by_id:
+        u = db.get(User, row.uae_attested_by_id)
+        out.uae_attested_by_name = (u.full_name or u.email) if u else None
     return out
 
 
@@ -58,11 +61,18 @@ def update_dlt(db: Session, ctx: AppContext, data: DltConfigIn) -> DltConfigOut:
     elif changed:
         # Changed registration details must be confirmed again.
         row.attested_by_id = row.attested_at = None
+    if data.uae_attest is True:
+        # UAE: "we are UAE-licensed and have uploaded our consents to TDRA's CMS" (who and when is kept).
+        row.uae_attested_by_id, row.uae_attested_at = ctx.user.id, utcnow()
+    elif data.uae_attest is False:
+        row.uae_attested_by_id = row.uae_attested_at = None
     db.flush()
     audit_service.record(db, "sms.registration_updated", actor_user_id=ctx.user.id,
                          organization_id=ctx.organization_id, application_id=ctx.application_id,
                          target_type="sms_registration", target_id=row.id,
-                         meta={"attested": bool(data.attest), "fields_changed": changed})
+                         meta={"attested": bool(data.attest), "fields_changed": changed,
+                               **({"uae_attested": data.uae_attest, "uae_statement": uae.ATTESTATION_TEXT}
+                                  if data.uae_attest is not None else {})})
     return dlt_out(db, row)
 
 
@@ -84,6 +94,9 @@ def list_senders(db: Session, ctx: AppContext) -> list[SmsSender]:
 
 def create_sender(db: Session, ctx: AppContext, data: SenderIn) -> SmsSender:
     ctx.require(Perm.SETTINGS_WRITE)
+    blocked = uae.sms_blocked(data.country)
+    if blocked:
+        raise ValidationFailed(blocked, code="UAE_SMS_COMING_SOON")
     err = rules.validate_sender(data.country, data.kind, data.sender_id)
     if err:
         raise ValidationFailed(err, code="INVALID_SENDER_ID", details=[{"field": "sender_id", "message": err}])

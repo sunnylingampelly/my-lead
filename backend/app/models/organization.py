@@ -43,6 +43,8 @@ class Organization(TimestampMixin, SoftDeleteMixin, Base):
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Owners and admins must use two-factor authentication; until they set it up, org admin actions are refused.
+    require_mfa_admins: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     members: Mapped[list["OrganizationMember"]] = relationship(back_populates="organization")
 

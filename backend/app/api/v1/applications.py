@@ -95,10 +95,11 @@ def compliance(ctx: AppCtx, db: DB):
 @router.get("/regions")
 def regions(user: CurrentUser):
     """Markets with first-class support and their defaults."""
-    from app.services.regions import PROFILES
+    from app.services.regions import PROFILES, business_days
 
     return [{"code": p.code, "name": p.name, "currency": p.currency, "dial_code": p.dial_code,
-             "default_timezone": p.default_timezone} for p in PROFILES.values()]
+             "default_timezone": p.default_timezone, "business_days": list(business_days(p.code))}
+            for p in PROFILES.values()]
 
 
 @router.get("/apps/{app_id}/dashboard")

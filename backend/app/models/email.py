@@ -163,3 +163,15 @@ class WebhookEvent(Base):
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class EmailDomainCheck(Base):
+    """Latest DNS authentication check (SPF, DKIM, DMARC, MX) for a sender domain. DNS is public, so one row
+    per domain serves every application that sends from it."""
+
+    __tablename__ = "email_domain_checks"
+
+    domain: Mapped[str] = mapped_column(String(253), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # authenticated|partial|unauthenticated|error
+    results: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    checked_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)

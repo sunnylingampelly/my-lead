@@ -73,7 +73,8 @@ def status() -> dict:
 
 def language_rule(language: str | None) -> str:
     if not language or language == "auto":
-        return "Reply in the language the visitor writes in (default to English)."
+        return ("Reply in the language the visitor writes in, including Arabic, Hindi and other non-Latin "
+                "scripts (default to English).")
     name = LANGUAGES.get(language.split("-")[0], language)
     return f"Reply in {name}, unless the visitor clearly writes in another language; then use theirs."
 

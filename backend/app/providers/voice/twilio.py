@@ -15,6 +15,7 @@ VOICES = {
     ("hi-IN", "female"): "Polly.Kajal-Neural", ("hi-IN", "male"): "Polly.Kajal-Neural",
     ("en-US", "female"): "Polly.Joanna-Neural", ("en-US", "male"): "Polly.Matthew-Neural",
     ("es-US", "female"): "Polly.Lupe-Neural", ("es-US", "male"): "Polly.Pedro-Neural",
+    ("ar-AE", "female"): "Polly.Hala-Neural", ("ar-AE", "male"): "Polly.Zayd-Neural",
 }
 
 

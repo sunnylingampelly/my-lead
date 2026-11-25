@@ -26,7 +26,7 @@ from app.services.voice import rules
 KINDS = {"IN": ("series_140", "series_160"), "US": ("local", "toll_free")}
 KIND_LABELS = {"series_140": "140-series (promotional)", "series_160": "160-series (service & transactional)",
                "local": "Local", "toll_free": "Toll-free"}
-COUNTRY_NAME = {"IN": "India", "US": "the United States"}
+COUNTRY_NAME = {"IN": "India", "AE": "the UAE", "US": "the United States"}
 # Statuses a number may be called from. "assigned"/"quarantined" only exist on rows from the old rental flow.
 USABLE = ("available",)
 
@@ -35,6 +35,9 @@ def kinds_for(country: str | None, category: str) -> tuple[str, ...]:
     """Number kinds that may place this category of call to this country, in order of preference."""
     if country == "IN":
         return ("series_140",) if category == "promotional" else ("series_160",)
+    if country == "AE":
+        # UAE calls must come from the customer's own licensed UAE number (not supported yet): no pool kind.
+        return ("customer_uae",)
     return ("local", "toll_free")
 
 
@@ -76,6 +79,12 @@ def pick_caller(db: Session, *, country: str | None, kind: str | tuple[str, ...]
 
 def availability(db: Session, country: str | None, category: str, ai: bool = False) -> str | None:
     """None when Signalcraft can place this category of call to this country; otherwise why not."""
+    if country == "AE":
+        from app.services import uae
+
+        # Even with the switch on, UAE calls need the customer's own licensed number (not supported yet).
+        return uae.voice_blocked("AE") or ("UAE calls must come from your own licensed UAE number, which isn't "
+                                           "supported yet.")
     if country not in KINDS:
         return "Calling is available to India and the United States."
     if settings.COMMUNICATION_MODE != "live":

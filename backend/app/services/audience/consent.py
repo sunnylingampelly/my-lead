@@ -168,6 +168,8 @@ def eligibility(db: Session, ctx: AppContext, contact: Contact) -> dict[str, dic
                 reasons.append("Previously unsubscribed")
         if contact.status == "blocked" or (ch == "email" and contact.status == "bounced"):
             reasons.append(f"Contact is {contact.status}")
+        if ch == "voice" and getattr(contact, "dncr_registered", False):
+            reasons.append("On the UAE Do Not Call Registry (DNCR)")
         out[ch] = {"eligible": not reasons, "reasons": reasons}
     return out
 

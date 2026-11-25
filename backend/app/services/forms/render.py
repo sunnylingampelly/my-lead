@@ -91,14 +91,15 @@ def _field_html(f: dict, countries: list[dict], default_country: str | None) -> 
     req = bool(f.get("required"))
     star = '<span class="sc-req" aria-hidden="true"> *</span>' if req else ""
     described = f'e_{e(fid)}' + (f' h_{e(fid)}' if f.get("help") else "")
-    common = (f'id="f_{e(fid)}" name="{e(fid)}" aria-describedby="{described}"'
+    # dir="auto": Arabic (and other right-to-left) text typed or configured renders right to left.
+    common = (f'id="f_{e(fid)}" name="{e(fid)}" aria-describedby="{described}" dir="auto"'
               + (' required aria-required="true"' if req else ""))
     ph = f' placeholder="{e(f.get("placeholder"))}"' if f.get("placeholder") else ""
-    help_ = f'<p class="sc-help" id="h_{e(fid)}">{e(f["help"])}</p>' if f.get("help") else ""
+    help_ = f'<p class="sc-help" id="h_{e(fid)}" dir="auto">{e(f["help"])}</p>' if f.get("help") else ""
     err = f'<p class="sc-error" id="e_{e(fid)}"></p>'
     cls = f'sc-field sc-w-{e(f.get("width") or "full")} sc-t-{e(t)}'
-    attrs = f'class="{cls}" data-field="{e(fid)}" data-step="{int(f.get("step") or 0)}"'
-    label = f'<label class="sc-label" for="f_{e(fid)}">{e(f.get("label"))}{star}</label>'
+    attrs = f'class="{cls}" data-field="{e(fid)}" data-step="{int(f.get("step") or 0)}" dir="auto"'
+    label = f'<label class="sc-label" for="f_{e(fid)}" dir="auto">{e(f.get("label"))}{star}</label>'
     if t in ("radio", "checkboxes"):
         kind = "radio" if t == "radio" else "checkbox"
         return (f'<fieldset {attrs} aria-describedby="{described}"'
@@ -164,9 +165,10 @@ def form_html(form, *, hosted: bool, branding: bool, countries: list[dict], defa
         step_html.append(f'<section class="sc-step" data-step-index="{i}"' + (" hidden" if i else "")
                          + f' aria-label="Step {i + 1} of {len(steps)}">{legend}<div class="sc-grid">'
                          + "".join(fields_by_step.get(i, [])) + "</div></section>")
-    title = (f'<h1 class="sc-title">{e(d.get("title"))}</h1>' if des.get("show_title") and d.get("title") else "")
-    desc = (f'<p class="sc-desc">{e(d.get("description"))}</p>' if des.get("show_title") and d.get("description")
-            else "")
+    title = (f'<h1 class="sc-title" dir="auto">{e(d.get("title"))}</h1>' if des.get("show_title") and d.get("title")
+             else "")
+    desc = (f'<p class="sc-desc" dir="auto">{e(d.get("description"))}</p>'
+            if des.get("show_title") and d.get("description") else "")
     progress = (f'<div class="sc-progress" role="progressbar" aria-valuemin="1" aria-valuemax="{len(steps)}" '
                 f'aria-valuenow="1" aria-label="Form progress"><div class="sc-progress-track">'
                 f'<div class="sc-progress-bar" style="width:{100 / len(steps):.0f}%"></div></div>'
@@ -226,7 +228,7 @@ def form_html(form, *, hosted: bool, branding: bool, countries: list[dict], defa
         + (" hidden" if multi else "") + f'>{e(des["button_text"])}</button></div>'
         + '<p class="sc-status" id="sc-status" role="status" aria-live="polite"></p>'
         + brand + '</form>'
-        f'<div class="sc-success" data-sc-success hidden role="status" tabindex="-1">{success}{brand}</div>'
+        f'<div class="sc-success" data-sc-success hidden role="status" tabindex="-1" dir="auto">{success}{brand}</div>'
         f'</main><script type="application/json" id="sc-config">{json_for_script(config)}</script>'
         f'<script src="/embed/forms-assets/form.js?v={js_v}" defer></script></body></html>'
     )

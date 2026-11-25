@@ -1,4 +1,15 @@
 """Import every model so Alembic and metadata.create_all see them."""
+from app.models.ai_team import (
+    AgentRun,
+    AgentRunStep,
+    AgentSlackDestination,
+    AiAgent,
+    AiPendingAction,
+    AiUsageCounter,
+    AssistantConversation,
+    AssistantMessage,
+    SlackConnection,
+)
 from app.models.application import Application, ApplicationMember, ApplicationSettings
 from app.models.audience import (
     ConsentRecord,
@@ -14,7 +25,7 @@ from app.models.audience import (
     SuppressionEntry,
     Tag,
 )
-from app.models.audit import AuditLog
+from app.models.audit import AuditLog, DataRequest
 from app.models.automation import Workflow, WorkflowRun, WorkflowStep
 from app.models.base import Base
 from app.models.billing import Subscription, UsageSettlement, Wallet, WalletHold, WalletTransaction
@@ -44,14 +55,22 @@ from app.models.crm import (
     PipelineStage,
     ScoringRule,
 )
-from app.models.email import EmailCampaign, EmailEvent, EmailMessage, EmailSender, EmailTemplate, WebhookEvent
+from app.models.email import (
+    EmailCampaign,
+    EmailDomainCheck,
+    EmailEvent,
+    EmailMessage,
+    EmailSender,
+    EmailTemplate,
+    WebhookEvent,
+)
 from app.models.forms import LeadForm, LeadFormDailyStat, LeadFormSubmission, LeadFormVersion
 from app.models.notification import Notification
 from app.models.organization import Invitation, Organization, OrganizationMember, Permission, Role, RolePermission
-from app.models.payment import Payment
+from app.models.payment import BillingProfile, Invoice, InvoiceSequence, Payment
 from app.models.sms import SmsCampaign, SmsDltConfiguration, SmsEvent, SmsInbound, SmsMessage, SmsSender, SmsTemplate
 from app.models.support import SupportGrant
-from app.models.user import EmailVerification, PasswordReset, User, UserSession
+from app.models.user import EmailVerification, PasswordReset, User, UserRecoveryCode, UserSession
 from app.models.voice import (
     PhoneNumber,
     VoiceAgent,
@@ -63,6 +82,15 @@ from app.models.voice import (
 )
 
 __all__ = [
+    "AgentRun",
+    "AgentRunStep",
+    "AgentSlackDestination",
+    "AiAgent",
+    "AiPendingAction",
+    "AiUsageCounter",
+    "AssistantConversation",
+    "AssistantMessage",
+    "SlackConnection",
     "ChatAgent",
     "ChatBot",
     "ChatCannedResponse",
@@ -87,6 +115,10 @@ __all__ = [
     "ScoringRule",
     "SupportGrant",
     "Payment",
+    "BillingProfile",
+    "Invoice",
+    "InvoiceSequence",
+    "EmailDomainCheck",
     "Subscription",
     "UsageSettlement",
     "Wallet",
@@ -136,6 +168,7 @@ __all__ = [
     "ApplicationMember",
     "ApplicationSettings",
     "AuditLog",
+    "DataRequest",
     "Base",
     "EmailVerification",
     "Invitation",
@@ -146,5 +179,6 @@ __all__ = [
     "Role",
     "RolePermission",
     "User",
+    "UserRecoveryCode",
     "UserSession",
 ]

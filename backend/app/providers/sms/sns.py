@@ -38,7 +38,10 @@ def _attr(value: str) -> dict:
 
 def message_attributes(message: OutboundSms) -> dict:
     attrs = {"AWS.SNS.SMS.SMSType": _attr("Promotional" if message.category == "promotional" else "Transactional")}
-    if message.country == "IN":
+    if message.country == "AE":
+        # UAE: an alphanumeric sender ID registered with e& and du ("AD-" prefix for promotional).
+        attrs["AWS.SNS.SMS.SenderID"] = _attr(message.sender_id)
+    elif message.country == "IN":
         attrs["AWS.SNS.SMS.SenderID"] = _attr(message.sender_id)
         if message.dlt_entity_id:
             attrs["AWS.MM.SMS.EntityId"] = _attr(message.dlt_entity_id)
@@ -56,6 +59,12 @@ class SnsSmsProvider(SmsProvider):
         self._client = client
 
     def send(self, message: OutboundSms) -> SmsResult:
+        from app.services import uae
+
+        blocked = uae.sms_blocked(message.country, message.to)
+        if blocked:  # last line of defence for the UAE kill switch
+            return SmsResult(accepted=False, provider=self.name, error_code="UAE_SMS_DISABLED",
+                             error_message=blocked, permanent_failure=True)
         if message.country == "IN" and not (message.dlt_template_id and message.dlt_entity_id):
             return SmsResult(accepted=False, provider=self.name, error_code="DLT_MISSING",
                              error_message="Indian SMS needs the DLT entity ID and template ID",

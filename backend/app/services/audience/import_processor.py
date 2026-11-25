@@ -182,7 +182,20 @@ def _chunk(db: Session, ctx: TaskContext, imp: Import, chunk, defs, rule, opts, 
     limit_reason = (f"Contact limit reached: your plan allows {cap:,} contacts. Upgrade to Pro for unlimited contacts."
                     if cap is not None else "")
 
+    # People who asked for erasure stay out: their hashed identifiers are kept as "erased" suppressions.
+    from app.services.privacy import is_erased
+    from app.utils.contact_normalize import identifier_hash
+
+    def _hashes(n) -> list[str]:
+        return [identifier_hash(v) for v in (n.email, n.phone.e164 if n.phone else None) if v]
+
+    erased = is_erased(db, ctx.application_id, [h for p in parsed for h in _hashes(p[2])])
+
     for line, row, n, ek, pk in parsed:
+        if erased and erased.intersection(_hashes(n)):
+            # No raw values are kept for these rows: that would re-store the erased person's data.
+            outcome(line, "skipped", "This person asked for their data to be erased", raw=None)
+            continue
         prior = (ek and seen.get(ek)) or (pk and seen.get(pk))
         if prior:
             outcome(line, "duplicate", f"Same email or phone as row {prior}", raw=row)

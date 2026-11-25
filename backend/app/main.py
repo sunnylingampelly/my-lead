@@ -47,6 +47,9 @@ def _start_local_scheduler() -> None:
                     from app.services.chat.conversations import tick_job as chat_tick
 
                     chat_tick()
+                    from app.services.ai_team.runner import tick as ai_team_tick
+
+                    ai_team_tick()
                 if ticks % 15 == 0:  # about every five minutes: AI calls whose results are missing
                     sweep_ai_calls()
                 if ticks % 30 == 0:  # about every 10 minutes
@@ -60,17 +63,11 @@ def _start_local_scheduler() -> None:
 
 
 def _init_error_reporting() -> None:
-    """Send unhandled errors to Sentry when SENTRY_DSN is set and sentry-sdk is installed.
-    Request bodies and personal data are not sent."""
-    if not settings.SENTRY_DSN:
-        return
-    try:
-        import sentry_sdk
-    except ImportError:
-        log.warning("sentry_sdk_not_installed")
-        return
-    sentry_sdk.init(dsn=settings.SENTRY_DSN, environment=settings.ENVIRONMENT, send_default_pii=False,
-                    max_request_body_size="never", traces_sample_rate=0.0)
+    """Send unhandled errors to Sentry when SENTRY_DSN is set (see app.core.error_reporting: no personal
+    data, no request bodies, credential headers scrubbed, environment and release tagged)."""
+    from app.core.error_reporting import init_error_reporting
+
+    init_error_reporting()
 
 
 def create_app() -> FastAPI:

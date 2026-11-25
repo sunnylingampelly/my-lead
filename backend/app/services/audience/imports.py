@@ -202,8 +202,9 @@ def start(db: Session, ctx: AppContext, import_id: str, mapping: dict[str, str],
         if not (c.source or "").strip():
             raise ValidationFailed("Describe where this consent was collected", code="CONSENT_SOURCE_REQUIRED")
         if ({"sms", "voice"} & set(channels)) and not (c.evidence or "").strip():
-            raise ValidationFailed("Marketing SMS and calls need documented consent (required by TCPA for US numbers "
-                                   "and expected under India's DLT rules). Describe the evidence you hold.",
+            raise ValidationFailed("Marketing SMS and calls need documented consent (required by TCPA for US numbers, "
+                                   "expected under India's DLT rules and by UAE TDRA rules). Describe the evidence "
+                                   "you hold.",
                                    code="WRITTEN_CONSENT_REQUIRED")
     list_id = options.list_id
     if list_id:

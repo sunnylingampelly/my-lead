@@ -59,6 +59,8 @@ def eligibility_condition(channel: str):
         ]
         if channel == "sms":
             conds.append(or_(Contact.phone_type.is_(None), Contact.phone_type != "landline"))
+        else:
+            conds.append(Contact.dncr_registered.is_(False))  # UAE Do Not Call Registry: never called
         return and_(*conds)
     raise ValidationFailed(f"Unknown channel {channel}")
 

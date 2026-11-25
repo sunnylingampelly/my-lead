@@ -13,16 +13,20 @@ from app.models import Organization
 from app.models.payment import Payment
 from app.providers import payments as pp
 from app.schemas.common import Page, PageParams
-from app.services import audit_service
+from app.services import audit_service, uae
+from app.services.billing import invoices
 from app.services.billing import wallet as wl
 from app.utils.time import utcnow
 
 log = get_logger(__name__)
-LIMITS = {"INR": (Decimal("100"), Decimal("500000")), "USD": (Decimal("5"), Decimal("10000"))}
+LIMITS = {"INR": (Decimal("100"), Decimal("500000")), "USD": (Decimal("5"), Decimal("10000")),
+          "AED": (Decimal("20"), Decimal("37000"))}
 
 
 def provider_for(currency: str) -> str | None:
-    if currency == "INR" and settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET and settings.RAZORPAY_WEBHOOK_SECRET:
+    """INR and AED top-ups go through Razorpay (AED as an international payment, settled in INR); USD via Stripe."""
+    if currency in ("INR", "AED") and settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET \
+            and settings.RAZORPAY_WEBHOOK_SECRET:
         return "razorpay"
     if currency == "USD" and settings.STRIPE_SECRET_KEY and settings.STRIPE_WEBHOOK_SECRET:
         return "stripe"
@@ -41,6 +45,11 @@ def create_checkout(db: Session, ctx, amount: Decimal) -> Payment:
     if settings.COMMUNICATION_MODE != "live":
         raise ValidationFailed("Payments are turned off in simulation mode. Add test credit instead.",
                                code="SIMULATION_MODE")
+    if w.currency == "AED":
+        # UAE: sold to VAT-registered businesses only (reverse charge needs the buyer's TRN).
+        p0 = invoices.get_profile_row(db, ctx.organization_id)
+        if not (p0 and uae.valid_trn(p0.trn)):
+            raise ValidationFailed(uae.TRN_REQUIRED, code="UAE_TRN_REQUIRED", details={"field": "trn"})
     provider = provider_for(w.currency)
     if provider is None:
         raise ValidationFailed(f"Online payment in {w.currency} is not set up on this platform yet. "
@@ -49,18 +58,24 @@ def create_checkout(db: Session, ctx, amount: Decimal) -> Payment:
     if not lo <= amount <= hi:
         raise ValidationFailed(f"Add between {w.currency} {lo:,.0f} and {w.currency} {hi:,.0f}", code="INVALID_AMOUNT")
     org = db.get(Organization, ctx.organization_id)
-    p = Payment(organization_id=org.id, provider=provider, amount=amount, currency=w.currency, status="pending",
-                created_by_id=ctx.user.id, meta={})
+    # Prices exclude GST: the customer pays amount + GST and the wallet is credited `amount`.
+    tax, buyer = invoices.checkout_tax(db, org.id, w.currency, amount, ctx.user.email)
+    p = Payment(organization_id=org.id, provider=provider, amount=amount, tax_amount=tax.tax, gross_amount=tax.total,
+                currency=w.currency, status="pending", created_by_id=ctx.user.id,
+                meta={"tax": tax.as_dict(), "buyer": buyer})
     db.add(p)
     db.flush()
     back = f"{settings.FRONTEND_URL}/orgs/{org.id}/billing?payment={p.id}"
+    label = (f"Wallet credit {w.currency} {amount:,.2f} + GST {w.currency} {tax.tax:,.2f}" if tax.tax
+             else f"Wallet credit {w.currency} {amount:,.2f}")
     try:
         if provider == "stripe":
-            co = pp.stripe_checkout(settings.STRIPE_SECRET_KEY, amount=amount, currency=w.currency, payment_id=p.id,
+            co = pp.stripe_checkout(settings.STRIPE_SECRET_KEY, amount=tax.total, currency=w.currency, payment_id=p.id,
                                     org_name=org.name, success_url=back, cancel_url=back, email=ctx.user.email)
         else:
-            co = pp.razorpay_link(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET, amount=amount,
-                                  payment_id=p.id, org_name=org.name, callback_url=back, email=ctx.user.email)
+            co = pp.razorpay_link(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET, amount=tax.total,
+                                  payment_id=p.id, org_name=org.name, callback_url=back, email=ctx.user.email,
+                                  description=label, currency=w.currency)
     except pp.PaymentError as exc:
         p.status, p.failure_reason = "failed", str(exc)[:255]
         db.commit()
@@ -68,8 +83,13 @@ def create_checkout(db: Session, ctx, amount: Decimal) -> Payment:
     p.provider_ref, p.checkout_url = co.provider_ref, co.url
     audit_service.record(db, "billing.checkout_created", actor_user_id=ctx.user.id, organization_id=org.id,
                          target_type="payment", target_id=p.id, meta={"amount": float(amount), "currency": w.currency,
-                                                                       "provider": provider})
+                                                                       "tax": float(tax.tax), "provider": provider})
     return p
+
+
+def gross(p: Payment) -> Decimal:
+    """What the customer pays: the credit plus GST (older payments carry no tax)."""
+    return Decimal(str(p.gross_amount if p.gross_amount is not None else p.amount))
 
 
 def get_payment(db: Session, ctx, payment_id: str) -> dict:
@@ -81,9 +101,10 @@ def get_payment(db: Session, ctx, payment_id: str) -> dict:
 
 
 def out(p: Payment) -> dict:
-    return {"id": p.id, "provider": p.provider, "amount": float(p.amount), "currency": p.currency, "status": p.status,
+    return {"id": p.id, "provider": p.provider, "amount": float(p.amount), "tax_amount": float(p.tax_amount or 0),
+            "gross_amount": float(gross(p)), "currency": p.currency, "status": p.status,
             "paid_at": p.paid_at.isoformat() if p.paid_at else None, "failure_reason": p.failure_reason,
-            "created_at": p.created_at.isoformat()}
+            "invoice_id": (p.meta or {}).get("invoice_id"), "created_at": p.created_at.isoformat()}
 
 
 def list_payments(db: Session, ctx, params: PageParams) -> Page:
@@ -104,7 +125,7 @@ def mark_paid(db: Session, payment_id: str | None, provider: str, provider_ref: 
         return "unknown_payment"
     if provider_ref and p.provider_ref and provider_ref != p.provider_ref:
         return "reference_mismatch"
-    if paid_minor is not None and paid_minor != pp.minor_units(Decimal(str(p.amount))):
+    if paid_minor is not None and paid_minor != pp.minor_units(gross(p)):
         p.status, p.failure_reason = "failed", "Paid amount did not match the checkout"
         log.warning("payment_amount_mismatch", payment_id=p.id)
         return "amount_mismatch"
@@ -119,6 +140,10 @@ def mark_paid(db: Session, payment_id: str | None, provider: str, provider_ref: 
             meta={"provider_payment_id": provider_payment_id, "provider_ref": p.provider_ref}, actor_id=p.created_by_id)
     p.status, p.paid_at = "paid", utcnow()
     p.meta = {**(p.meta or {}), "provider_payment_id": provider_payment_id}
+    # The tax invoice is issued in this same transaction (its number is allocated under a row lock).
+    inv = invoices.issue_for_payment(db, p)
+    p.meta = {**p.meta, "invoice_id": inv.id, "invoice_number": inv.number}
+    db.info.setdefault("issued_invoices", []).append(inv.id)  # emailed by the caller after commit
     return "credited"
 
 

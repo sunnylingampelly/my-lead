@@ -26,6 +26,7 @@ from app.models.sms import SmsCampaign, SmsMessage, SmsTemplate
 from app.providers.sms.base import OutboundSms, SmsProvider, TransientSmsError
 from app.providers.sms.factory import provider_for
 from app.providers.sms.simulation import simulated_outcome
+from app.services import uae
 from app.services.audience.import_processor import TaskContext
 from app.services.audience.query import base_query, eligibility_condition
 from app.services.email.campaigns import audience_condition
@@ -70,7 +71,7 @@ def launch(campaign_id: str) -> str:
         if c.status == "queued":
             ctx = _task_ctx(db, c)
             checks, _ = readiness(db, ctx, c)
-            failing = [ch for ch in checks if not ch.ok]
+            failing = [ch for ch in checks if not ch.ok and not ch.warning]
             if failing:
                 return _fail(db, c, "; ".join(f"{ch.label}: {ch.detail}" for ch in failing))
             sender = sender_of(db, c)
@@ -222,8 +223,15 @@ def _send_batch(db: Session, c: SmsCampaign, app: Application, quiet: tuple[str,
         if reason:
             m.status, m.error_code, m.error_message = "skipped", "ineligible", reason
             continue
+        if not settings.SMS_ENABLED:  # SMS is "coming soon" everywhere: existing messages are skipped safely
+            m.status, m.error_code, m.error_message = "skipped", "sms_disabled", uae.SMS_GLOBAL_COMING_SOON
+            continue
+        blocked = uae.sms_blocked(m.country, m.to_phone)
+        if blocked:
+            m.status, m.error_code, m.error_message = "skipped", "uae_sms_disabled", blocked
+            continue
         if c.category == "promotional":
-            resume_at = rules.quiet_until(utcnow(), contact.timezone or app.timezone, *quiet)
+            resume_at = rules.promo_resume_at(utcnow(), m.country, contact.timezone or app.timezone, quiet)
             if resume_at is not None:
                 m.status, m.next_attempt_at, m.deferred_reason = "deferred", resume_at, "quiet_hours"
                 continue

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 30
+    # A rotated refresh token is accepted once more within this many seconds if its successor was never used
+    # (a reload aborted the refresh response). Outside it, or once the successor is used, reuse = theft.
+    REFRESH_REUSE_GRACE_SECONDS: int = 30
     EMAIL_VERIFICATION_TTL_HOURS: int = 24
     PASSWORD_RESET_TTL_MINUTES: int = 60
     INVITATION_TTL_DAYS: int = 7
@@ -76,29 +79,72 @@ class Settings(BaseSettings):
     EMAIL_PRICING: dict = {
         "IN": {"currency": "INR", "per_email": 0.05},
         "US": {"currency": "USD", "per_email": 0.0010},
+        # AED rows across the *_PRICING settings are the USD prices x 3.6725, rounded.
+        # OWNER: review the AED margins before launch.
+        "AE": {"currency": "AED", "per_email": 0.0037},
         "default": {"currency": "USD", "per_email": 0.0010},
     }
-    # Conversion between a channel's price currency and the wallet currency.
-    FX_RATES: dict = {"USD_INR": 83.0}
+    # Conversion between a channel's price currency and the wallet currency. Pairs without a direct rate
+    # (e.g. INR to AED) are converted through USD. AED is pegged at 3.6725 per USD.
+    FX_RATES: dict = {"USD_INR": 83.0, "USD_AED": 3.6725}
     # Credit added once to new wallets while the platform is in simulation mode (not real money).
-    TRIAL_CREDIT: dict = {"INR": 1000, "USD": 25}
-    LOW_BALANCE_DEFAULT: dict = {"INR": 500, "USD": 10}
-    # Live wallet top-ups: Stripe (USD wallets) and Razorpay (INR wallets). Hosted pages + signed webhooks.
+    TRIAL_CREDIT: dict = {"INR": 1000, "USD": 25, "AED": 90}
+    LOW_BALANCE_DEFAULT: dict = {"INR": 500, "USD": 10, "AED": 35}
+    # Kill switches for UAE SMS and calls. The rules are built, but both stay off at launch: AWS has paused
+    # UAE sender-ID registration, and UAE marketing calls must come from the customer's own licensed number.
+    SMS_UAE_ENABLED: bool = False
+    # Global SMS switch. SMS is "coming soon" in every market: while False, every SMS write/action endpoint is
+    # refused (SMS_COMING_SOON), automation SMS steps can't be added and the engine skips SMS sends.
+    SMS_ENABLED: bool = False
+    VOICE_UAE_ENABLED: bool = False
+    # Opt-out text appended to promotional UAE SMS (English, or Arabic when the message is Arabic).
+    SMS_UAE_OPT_OUT_EN: str = "To opt out reply STOP"
+    SMS_UAE_OPT_OUT_AR: str = "لإلغاء الاشتراك أرسل STOP"
+    # Live wallet top-ups: Stripe (USD wallets) and Razorpay (INR and AED wallets; AED uses Razorpay
+    # international payments, which must be activated on the Razorpay account). Hosted pages + signed webhooks.
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
     RAZORPAY_KEY_ID: str | None = None
     RAZORPAY_KEY_SECRET: str | None = None
     RAZORPAY_WEBHOOK_SECRET: str | None = None
+    # GST tax invoices for wallet top-ups (the platform is the seller). Prices exclude GST: an INR top-up of X
+    # is charged X + GST_RATE% and credits X to the wallet. INR top-ups are refused until SELLER_GSTIN and
+    # SELLER_STATE_CODE are set. USD (export) invoices are zero-rated under the LUT in SELLER_LUT_NUMBER.
+    SELLER_LEGAL_NAME: str = "Signalcraft"
+    SELLER_GSTIN: str | None = None
+    SELLER_ADDRESS: str = ""
+    SELLER_STATE_CODE: str | None = None  # two-digit GST state code, e.g. "29" (Karnataka)
+    SELLER_PAN: str | None = None
+    SELLER_LUT_NUMBER: str | None = None  # ARN of the Letter of Undertaking for zero-rated exports
+    INVOICE_SAC_CODE: str = "998431"  # confirm the SAC with your chartered accountant
+    GST_RATE: float = 18.0
+    # Invoice numbers are PREFIX/YY-YY/NNNNNN, sequential per Indian financial year (GST allows 16 characters).
+    INVOICE_NUMBER_PREFIX: str = "SC"
+    # Sender domain authentication (DNS checks shown on the senders page and in campaign readiness).
+    EMAIL_DNS_CHECKS_ENABLED: bool = True
+    EMAIL_SPF_INCLUDE: str = "amazonses.com"  # e.g. amazonses.com (SES) or spf.brevo.com (Brevo)
+    EMAIL_DKIM_SELECTORS: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["signalcraft"])
+    # When set, DKIM is a CNAME from {selector}._domainkey.{domain} to this target ({selector} and {domain}
+    # are filled in). When unset, a TXT record with a DKIM key at the selector passes.
+    EMAIL_DKIM_CNAME_TARGET: str | None = None
+    EMAIL_DNS_TIMEOUT_SECONDS: float = 3.0
     # Monitoring. /api/v1/metrics is disabled unless METRICS_TOKEN is set. Sentry is used if installed and set.
     METRICS_TOKEN: str | None = None
     SENTRY_DSN: str | None = None
+    # Release tag for error reports (e.g. a git SHA or version). Defaults to the app version.
+    SENTRY_RELEASE: str | None = None
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    # Where scripts/backup_db.py writes backups; the admin System settings show the newest one.
+    BACKUP_DIR: str | None = None
     # Simulation-mode test top-ups only; live payments need a payment provider (Phase 8).
-    TEST_TOPUP_MAX: dict = {"INR": 100000, "USD": 1000}
+    TEST_TOPUP_MAX: dict = {"INR": 100000, "USD": 1000, "AED": 3700}
     VOICE_MAX_CONCURRENT_CALLS: int = 10
     # Price per started minute of an answered call, by country.
     VOICE_PRICING: dict = {
         "IN": {"currency": "INR", "per_minute": 0.60},
         "US": {"currency": "USD", "per_minute": 0.0140},
+        # USD 0.10 (international) x 3.6725; OWNER: review the AED margin. UAE voice is off at launch.
+        "AE": {"currency": "AED", "per_minute": 0.37},
         "default": {"currency": "USD", "per_minute": 0.10},
     }
     # AI calling agents: price per started minute of an answered AI-agent call (replaces VOICE_PRICING for
@@ -106,6 +152,8 @@ class Settings(BaseSettings):
     VOICE_AI_PRICING: dict = {
         "IN": {"currency": "INR", "per_minute": 6.0},
         "US": {"currency": "USD", "per_minute": 0.12},
+        # USD 0.15 (international) x 3.6725; OWNER: review the AED margin. UAE voice is off at launch.
+        "AE": {"currency": "AED", "per_minute": 0.55},
         "default": {"currency": "USD", "per_minute": 0.15},
     }
     AI_CALL_EXPECTED_MINUTES: int = 2
@@ -120,6 +168,7 @@ class Settings(BaseSettings):
     CHAT_AI_PRICING: dict = {
         "IN": {"currency": "INR", "per_reply": 1.50},
         "US": {"currency": "USD", "per_reply": 0.02},
+        "AE": {"currency": "AED", "per_reply": 0.07},  # USD 0.02 x 3.6725; OWNER: review the AED margin
         "default": {"currency": "USD", "per_reply": 0.02},
     }
     # Knowledge up to this size goes whole into the (cached) system prompt; above it, the best chunks are
@@ -129,13 +178,30 @@ class Settings(BaseSettings):
     CHAT_FETCH_MAX_BYTES: int = 3_000_000
     CHAT_CRAWL_MAX_PAGES: int = 25
     CHAT_UPLOAD_MAX_BYTES: int = 10_000_000
+    # AI Team (the in-app AI Assistant, AI agents and the automation "AI step") runs on OpenAI's Responses API.
+    # Without OPENAI_API_KEY everything works in a deterministic, clearly labelled simulation mode. The website
+    # chatbot and AI calling agents stay on Claude (above). Fair-use daily limits per plan are in billing/plans.py.
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-6.2-astra"
+    OPENAI_MODEL_FAST: str | None = "gpt-6-luna"  # cheap classification/extraction (automation AI step)
+    OPENAI_TIMEOUT_SECONDS: float = 60.0
+    AI_AGENT_MAX_STEPS: int = 8
+    AI_AGENT_RUN_TIMEOUT_SECONDS: int = 120
+    # Slack app ("Add to Slack", OAuth v2). Without SLACK_CLIENT_ID/SECRET a simulated Slack connection logs
+    # messages to /dev/slack instead. The signing secret verifies interactivity requests (Approve / Reject).
+    SLACK_CLIENT_ID: str | None = None
+    SLACK_CLIENT_SECRET: str | None = None
+    SLACK_SIGNING_SECRET: str | None = None
     # Days a released number rests before it goes back to the pool, and the grace period for unpaid rent.
     NUMBER_QUARANTINE_DAYS: int = 7
     NUMBER_RENEWAL_GRACE_DAYS: int = 7
     # Price per SMS segment by country and category; platform admins will manage this in Phase 8.
+    # AE: the international USD 0.08 rate x 3.6725 (UAE termination costs far more than US 10DLC).
+    # OWNER: review the AED margins before launch.
     SMS_PRICING: dict = {
         "IN": {"currency": "INR", "promotional": 0.25, "transactional": 0.20, "service": 0.20},
         "US": {"currency": "USD", "promotional": 0.0110, "transactional": 0.0110, "service": 0.0110},
+        "AE": {"currency": "AED", "promotional": 0.29, "transactional": 0.29, "service": 0.29},
         "default": {"currency": "USD", "promotional": 0.08, "transactional": 0.08, "service": 0.08},
     }
     AWS_REGION: str = "ap-south-1"
@@ -170,6 +236,13 @@ class Settings(BaseSettings):
 
                 return json.loads(v)
             return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
+    @field_validator("EMAIL_DKIM_SELECTORS", mode="before")
+    @classmethod
+    def _split_selectors(cls, v):
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
     @model_validator(mode="after")

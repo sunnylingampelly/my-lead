@@ -33,22 +33,40 @@ def dec(x) -> Decimal:
     return Decimal(str(x or 0)).quantize(Q, rounding=ROUND_HALF_UP)
 
 
+WALLET_CURRENCY = {"IN": "INR", "AE": "AED"}
+
+
 def currency_for(country: str | None) -> str:
-    return "INR" if country == "IN" else "USD"
+    """Wallet currency for an organization's country: INR (India), AED (UAE), USD everywhere else."""
+    return WALLET_CURRENCY.get((country or "").upper(), "USD")
+
+
+def _rate(from_cur: str, to_cur: str) -> Decimal | None:
+    """Direct rate from settings.FX_RATES, or the inverse of the opposite pair."""
+    rate = settings.FX_RATES.get(f"{from_cur}_{to_cur}")
+    if rate:
+        return Decimal(str(rate))
+    inverse = settings.FX_RATES.get(f"{to_cur}_{from_cur}")
+    if inverse:
+        return Decimal("1") / Decimal(str(inverse))
+    return None
 
 
 def convert(amount, from_cur: str | None, to_cur: str) -> Decimal:
-    """Platform conversion rate (settings.FX_RATES), e.g. {"USD_INR": 83.0}."""
+    """Platform conversion rate (settings.FX_RATES), e.g. {"USD_INR": 83.0, "USD_AED": 3.6725}.
+
+    Without a direct pair (e.g. INR to AED) the amount is converted through USD."""
     a = dec(amount)
     if not from_cur or from_cur == to_cur:
         return a
-    rate = settings.FX_RATES.get(f"{from_cur}_{to_cur}")
+    rate = _rate(from_cur, to_cur)
+    if rate is None and "USD" not in (from_cur, to_cur):
+        first, second = _rate(from_cur, "USD"), _rate("USD", to_cur)
+        if first is not None and second is not None:
+            rate = first * second
     if rate is None:
-        inverse = settings.FX_RATES.get(f"{to_cur}_{from_cur}")
-        if not inverse:
-            raise ValidationFailed(f"No conversion rate from {from_cur} to {to_cur}", code="NO_FX_RATE")
-        rate = 1 / inverse
-    return dec(a * Decimal(str(rate)))
+        raise ValidationFailed(f"No conversion rate from {from_cur} to {to_cur}", code="NO_FX_RATE")
+    return dec(a * rate)
 
 
 def get_wallet(db: Session, organization_id: str, lock: bool = False) -> Wallet:

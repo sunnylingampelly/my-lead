@@ -14,8 +14,8 @@ from app.models import ApplicationSettings, Contact
 from app.schemas.email import ReadinessCheck
 from app.utils.time import utcnow
 
-SUPPORTED_COUNTRIES = ("IN", "US")
-COUNTRY_NAME = {"IN": "India", "US": "the United States"}
+SUPPORTED_COUNTRIES = ("IN", "AE", "US")
+COUNTRY_NAME = {"IN": "India", "AE": "the UAE", "US": "the United States"}
 DEFAULT_QUIET = ("21:00", "09:00")
 
 

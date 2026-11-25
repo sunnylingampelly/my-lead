@@ -12,7 +12,9 @@ from app.core.errors import ValidationFailed
 from app.core.permissions import Perm
 from app.models.automation import Workflow, WorkflowRun
 from app.models.billing import WalletTransaction
+from app.models.chat import ChatConversation
 from app.models.email import EmailCampaign, EmailMessage
+from app.models.forms import LeadFormDailyStat
 from app.models.sms import SmsCampaign, SmsMessage
 from app.models.voice import VoiceCall, VoiceCampaign
 from app.services.tenancy import AppContext
@@ -25,7 +27,11 @@ METRICS = [
     ("sms_sent", "Texts sent"), ("sms_delivered", "Texts delivered"), ("sms_failed", "Texts not delivered"),
     ("voice_calls", "Calls finished"), ("voice_answered", "Calls answered"), ("voice_minutes", "Billable minutes"),
     ("voice_opt_outs", "Pressed 9"), ("automation_entered", "Entered workflows"),
-    ("automation_completed", "Completed workflows"), ("spend", "Spend"),
+    ("automation_completed", "Completed workflows"),
+    ("form_views", "Form views"), ("form_submissions", "Form submissions"),
+    ("chat_conversations", "Chat conversations"), ("chat_leads", "Leads from chat"),
+    ("chat_ai_replies", "AI chat replies"), ("chat_bot_resolved", "Resolved by the bot"),
+    ("spend", "Spend"),
 ]
 
 
@@ -63,7 +69,8 @@ def _bounds(start: date, end: date, minutes: int) -> tuple[datetime, datetime]:
 
 # Metrics compared with the previous period of the same length.
 COMPARED = ("email_sent", "email_opened", "email_clicked", "sms_sent", "sms_delivered", "voice_calls",
-            "voice_answered", "automation_entered", "automation_completed", "spend")
+            "voice_answered", "automation_entered", "automation_completed", "form_views", "form_submissions",
+            "chat_conversations", "chat_leads", "chat_ai_replies", "chat_bot_resolved", "spend")
 
 
 def series(db: Session, ctx: AppContext, start: date | None, end: date | None, rank: str = "volume") -> dict:
@@ -105,6 +112,16 @@ def series(db: Session, ctx: AppContext, start: date | None, end: date | None, r
             "sms_delivery": rate(totals["sms_delivered"], totals["sms_sent"]),
             "voice_answer": rate(totals["voice_answered"], totals["voice_calls"]),
             "automation_completion": rate(totals["automation_completed"], totals["automation_entered"]),
+            # Same definitions as the lead-form report (submissions / views) and chat analytics (conversations
+            # without a hand-off to a person are bot-resolved).
+            "form_conversion": rate(totals["form_submissions"], totals["form_views"]),
+            "chat_bot_resolved": rate(totals["chat_bot_resolved"], totals["chat_conversations"]),
+            "chat_lead": rate(totals["chat_leads"], totals["chat_conversations"]),
+        },
+        "previous_rates": {
+            "form_conversion": rate(previous["form_submissions"], previous["form_views"]),
+            "chat_bot_resolved": rate(previous["chat_bot_resolved"], previous["chat_conversations"]),
+            "chat_lead": rate(previous["chat_leads"], previous["chat_conversations"]),
         },
         "top_campaigns": top_campaigns(db, app_id, lo, hi, rank=rank),
         "workflows": top_workflows(db, app_id, lo, hi),
@@ -136,8 +153,8 @@ def crm_block(db: Session, ctx: AppContext, lo: datetime, hi: datetime, p_lo: da
     app_id = ctx.application_id
     p = db.scalar(select(Pipeline).where(Pipeline.application_id == app_id)
                   .order_by(Pipeline.is_default.desc(), Pipeline.position).limit(1))
-    currency = p.currency if p else ("INR" if (getattr(ctx.application, "default_country", "") or "IN") == "IN"
-                                     else "USD")
+    country = (getattr(ctx.application, "default_country", "") or "IN").upper()
+    currency = p.currency if p else {"IN": "INR", "AE": "AED"}.get(country, "USD")
 
     def period(a: datetime, b: datetime) -> dict:
         created = db.scalar(select(func.count()).select_from(Deal).where(
@@ -200,6 +217,22 @@ def _collect(db: Session, app_id: str, start: date, end: date, minutes: int):
     r = WorkflowRun
     count("automation_entered", r, r.started_at)
     count("automation_completed", r, r.finished_at, r.status == "completed")
+    # Lead forms: the same per-form daily counters the form report reads (kept per UTC day).
+    fs = LeadFormDailyStat
+    for d, views, subs in db.execute(
+            select(fs.day, func.coalesce(func.sum(fs.views), 0), func.coalesce(func.sum(fs.submissions), 0))
+            .where(fs.application_id == app_id, fs.day >= start, fs.day <= end).group_by(fs.day)):
+        key = str(d)[:10]
+        if key in data:
+            data[key]["form_views"] += float(views or 0)
+            data[key]["form_submissions"] += float(subs or 0)
+    # Chat: conversations where the visitor wrote something (as in chat analytics).
+    cc = ChatConversation
+    real = cc.visitor_messages > 0
+    count("chat_conversations", cc, cc.created_at, real)
+    count("chat_bot_resolved", cc, cc.created_at, real, cc.handoff_requested_at.is_(None))
+    count("chat_ai_replies", cc, cc.created_at, real, agg=func.coalesce(func.sum(cc.ai_replies), 0))
+    count("chat_leads", cc, cc.lead_captured_at)
     t = WalletTransaction
     count("spend", t, t.created_at, t.type == "usage", agg=-func.coalesce(func.sum(t.amount), 0))
     return days, data
@@ -252,4 +285,11 @@ def export_csv(db: Session, ctx: AppContext, start: date | None, end: date | Non
     for p in data["points"]:
         w.writerow([p["date"]] + [p[k] for k, _ in METRICS])
     w.writerow(["total"] + [data["totals"][k] for k, _ in METRICS])
+    prev = data["previous"]
+    w.writerow([f"previous_period_total ({prev['start']} to {prev['end']})"] + [prev["totals"][k] for k, _ in METRICS])
+    w.writerow([])
+    w.writerow(["rate", "percent", "previous_period_percent"])
+    for k, v in data["rates"].items():
+        w.writerow([f"{k}_pct", "" if v is None else v,
+                    "" if data["previous_rates"].get(k) is None else data["previous_rates"][k]])
     return out.getvalue()

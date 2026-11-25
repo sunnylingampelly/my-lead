@@ -78,6 +78,8 @@ class Contact(TenantMixin, TimestampMixin, Base):
     email_unsubscribed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     sms_unsubscribed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     voice_unsubscribed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # The number is on the UAE Do Not Call Registry (DNCR): never called (Cabinet Resolution 56/2024).
+    dncr_registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     attributes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_activity_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_via_import_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

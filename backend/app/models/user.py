@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UTCDateTime, uuid_pk
@@ -23,12 +23,38 @@ class User(TimestampMixin, SoftDeleteMixin, Base):
     # Remembered so the UI can reopen the last organization/application the user worked in.
     last_organization_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_application_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Two-factor authentication (TOTP). Secrets are Fernet-encrypted (app.core.crypto). A pending secret is one
+    # being set up that has not yet been confirmed with a code.
+    mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    mfa_pending_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mfa_pending_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # Last accepted TOTP time step: a code is never accepted twice (replay protection).
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mfa_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mfa_locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
     sessions: Mapped[list["UserSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
     @property
     def email_verified(self) -> bool:
         return self.email_verified_at is not None
+
+    @property
+    def mfa_enabled(self) -> bool:
+        return self.mfa_enabled_at is not None and bool(self.mfa_secret)
+
+
+class UserRecoveryCode(Base):
+    """One-time two-factor recovery codes. Only a SHA-256 hash of each code is stored."""
+
+    __tablename__ = "user_recovery_codes"
+
+    id: Mapped[str] = uuid_pk()
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class UserSession(Base):

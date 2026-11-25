@@ -355,7 +355,7 @@
     var header = h("header", { class: "sc-header" }, [avatar, h("div", { class: "sc-title" }, [h("strong", { text: a.title || cfg.name }), els.status]), menuBtn, closeBtn, els.menu]);
     els.list = h("div", { class: "sc-list", role: "log", "aria-live": "polite", "aria-relevant": "additions", tabindex: "0", "aria-label": "Chat messages" });
     els.live = h("div", { class: "sc-sr", "aria-live": "assertive" });
-    els.input = h("textarea", { class: "sc-input", rows: "1", maxlength: "2000", placeholder: "Type your message…", "aria-label": "Message" });
+    els.input = h("textarea", { class: "sc-input", rows: "1", maxlength: "2000", placeholder: "Type your message…", "aria-label": "Message", dir: "auto" });
     els.input.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitInput(); }
     });
@@ -397,10 +397,11 @@
 
   function msgNode(m) {
     var meta = m.meta || {};
-    if (m.role === "system") return h("div", { class: "sc-system", role: "note" }, [m.body]);
+    if (m.role === "system") return h("div", { class: "sc-system", role: "note", dir: "auto" }, [m.body]);
     var mine = m.role === "visitor";
     var who = m.role === "agent" ? (m.author || "Team") : m.role === "bot" ? (cfg.name || "Assistant") : "You";
-    var bubble = h("div", { class: "sc-bubble" + (mine ? " sc-mine" : "") + (m.id.indexOf("tmp-") === 0 ? " sc-pending" : "") }, [rich(m.body)]);
+    // dir="auto": Arabic and other right-to-left messages render right to left.
+    var bubble = h("div", { class: "sc-bubble" + (mine ? " sc-mine" : "") + (m.id.indexOf("tmp-") === 0 ? " sc-pending" : ""), dir: "auto" }, [rich(m.body)]);
     var row = h("div", { class: "sc-row" + (mine ? " sc-row-mine" : ""), "data-id": m.id }, [
       h("span", { class: "sc-sr", text: who + " said:" }), bubble]);
     if (!mine) {
@@ -423,7 +424,7 @@
       var type = f.key === "email" ? "email" : f.key === "phone" ? "tel" : "text";
       var pre = f.key === "email" ? (S.identity.email || S.visitorEmail) : f.key === "name" ? S.identity.name : f.key === "phone" ? S.identity.phone : null;
       form.appendChild(h("label", { for: id, text: f.label + (f.required ? " *" : "") }));
-      form.appendChild(h("input", { id: id, name: f.key, type: type, required: f.required, value: pre || null, autocomplete: f.key === "name" ? "name" : f.key === "email" ? "email" : f.key === "phone" ? "tel" : f.key === "company" ? "organization" : "off", maxlength: "300" }));
+      form.appendChild(h("input", { id: id, name: f.key, type: type, required: f.required, value: pre || null, dir: "auto", autocomplete: f.key === "name" ? "name" : f.key === "email" ? "email" : f.key === "phone" ? "tel" : f.key === "company" ? "organization" : "off", maxlength: "300" }));
     });
     var consent = consentBox(lc.consent, form);
     form.appendChild(h("p", { class: "sc-err", role: "alert" }));
@@ -452,8 +453,8 @@
       form.appendChild(h("label", { for: id, text: f[1] }));
       var pre = f[0] === "email" ? (S.identity.email || S.visitorEmail) : f[0] === "name" ? S.identity.name : null;
       var last = S.messages.filter(function (m) { return m.role === "visitor"; }).slice(-1)[0];
-      form.appendChild(f[2] === "textarea" ? h("textarea", { id: id, name: f[0], rows: "3", maxlength: "4000", required: true, text: last ? last.body : "" })
-        : h("input", { id: id, name: f[0], type: f[2], required: f[3], value: pre || null, maxlength: "320", autocomplete: f[0] }));
+      form.appendChild(f[2] === "textarea" ? h("textarea", { id: id, name: f[0], rows: "3", maxlength: "4000", required: true, text: last ? last.body : "", dir: "auto" })
+        : h("input", { id: id, name: f[0], type: f[2], required: f[3], value: pre || null, maxlength: "320", autocomplete: f[0], dir: "auto" }));
     });
     var consent = consentBox((cfg.lead_capture || {}).consent, form);
     form.appendChild(h("p", { class: "sc-err", role: "alert" }));
@@ -503,7 +504,7 @@
     var node = els.list.querySelector(".sc-streaming");
     if (!node) {
       var t = els.list.querySelector(".sc-typing"); if (t) t.remove();
-      node = h("div", { class: "sc-row sc-streaming" }, [h("div", { class: "sc-bubble" })]);
+      node = h("div", { class: "sc-row sc-streaming" }, [h("div", { class: "sc-bubble", dir: "auto" })]);
       els.list.appendChild(node);
     }
     node.firstChild.replaceChildren(rich(S.streaming || ""));
@@ -548,7 +549,7 @@
       }
     }
     if (S.typing) frag.appendChild(h("div", { class: "sc-row sc-typing", "aria-label": "Typing" }, [h("div", { class: "sc-bubble" }, [h("span"), h("span"), h("span")])]));
-    if (S.streaming) frag.appendChild(h("div", { class: "sc-row sc-streaming" }, [h("div", { class: "sc-bubble" }, [rich(S.streaming)])]));
+    if (S.streaming) frag.appendChild(h("div", { class: "sc-row sc-streaming" }, [h("div", { class: "sc-bubble", dir: "auto" }, [rich(S.streaming)])]));
     var closed = S.conv && S.conv.closed;
     if (closed) {
       frag.appendChild(ratingCard());

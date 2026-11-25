@@ -17,6 +17,8 @@ class DltConfigIn(BaseModel):
     us_brand_id: str | None = Field(default=None, max_length=64)
     us_campaign_id: str | None = Field(default=None, max_length=64)
     attest: bool = False
+    # UAE: confirm (True) or withdraw (False) "UAE-licensed and consents uploaded to TDRA CMS"; None = unchanged.
+    uae_attest: bool | None = None
 
     @field_validator("principal_entity_id")
     @classmethod
@@ -34,11 +36,13 @@ class DltConfigOut(ORMModel):
     us_campaign_id: str | None
     attested_at: datetime | None
     attested_by_name: str | None = None
+    uae_attested_at: datetime | None = None
+    uae_attested_by_name: str | None = None
 
 
 class SenderIn(BaseModel):
     sender_id: str = Field(min_length=3, max_length=20)
-    country: Literal["IN", "US"]
+    country: Literal["IN", "AE", "US"]
     kind: Literal["promotional", "service", "transactional", "long_code", "toll_free", "short_code"]
     provider: Literal["simulation", "sns"] = "simulation"
     dlt_header_id: str | None = Field(default=None, max_length=32)

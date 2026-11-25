@@ -7,6 +7,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.permissions import ORG_WIDE_ROLES, Perm, Role
 from app.models import (
     ApplicationMember,
@@ -57,6 +58,19 @@ def sms_setup(db: Session, application_id: str, country: str | None) -> dict:
             ("active sending number", active_senders > 0, f"{base}/senders"),
         ]
         label = "Set up SMS for the US (10DLC registration and a number)"
+    elif country == "AE":
+        from app.services import uae
+
+        blocked = uae.sms_blocked("AE")
+        if blocked:
+            # Kill switch: shown as "coming soon", never as a broken step.
+            return {"label": "SMS for the UAE: coming soon", "done": False, "coming_soon": blocked,
+                    "href": base, "detail": blocked, "steps": []}
+        steps = [
+            ("UAE licence and TDRA consent confirmation", bool(dlt and dlt.uae_attested_at), f"{base}/registration"),
+            ("approved sender ID (AD- for promotional)", active_senders > 0, f"{base}/senders"),
+        ]
+        label = "Set up SMS for the UAE (TDRA confirmation and a sender ID)"
     else:
         steps = [("active sender", active_senders > 0, f"{base}/senders")]
         label = "Add an SMS sender"
@@ -71,7 +85,10 @@ def sms_setup(db: Session, application_id: str, country: str | None) -> dict:
 
 
 def voice_ready(db: Session, application_id: str, country: str | None) -> bool:
-    """Calls come from Signalcraft-managed numbers, so voice is ready once Indian apps have DLT registration."""
+    """Calls come from Signalcraft-managed numbers, so voice is ready once Indian apps have DLT registration.
+    UAE calls are not available yet (customer-owned UAE numbers are required)."""
+    if country == "AE":
+        return False
     if country != "IN":
         return True
     from app.services.sms.registration import dlt_row
@@ -158,7 +175,7 @@ def checklist(db: Session, ctx: AppContext, facts: dict | None = None) -> list[d
         return {"key": key, "label": label, "done": bool(done), "href": href, "cta": cta,
                 "available": ctx.has(perm), "optional": optional, "detail": detail}
 
-    return [
+    items = [
         item("invite_team", "Invite a teammate", f["org_members"] > 1 or f["pending_invites"] > 0,
              f"/orgs/{ctx.organization_id}/team?invite=1", "Invite", Perm.MEMBERS_INVITE, optional=True),
         item("import_contacts", "Import or add your contacts", f["contacts"] > 0,
@@ -169,8 +186,9 @@ def checklist(db: Session, ctx: AppContext, facts: dict | None = None) -> list[d
              f"{a}/email/senders", "Add sender", Perm.SETTINGS_WRITE),
         item("first_email", "Send your first email campaign", f["emails_launched"] > 0,
              f"{a}/email/campaigns", "Create campaign", Perm.CAMPAIGNS_WRITE),
-        item("sms_setup", sms["label"], sms["done"], sms["href"], "Set up SMS", Perm.SETTINGS_WRITE,
-             detail=sms["detail"]),
+        item("sms_setup", sms["label"], sms["done"], sms["href"],
+             "Learn more" if sms.get("coming_soon") else "Set up SMS", Perm.SETTINGS_WRITE,
+             optional=bool(sms.get("coming_soon")), detail=sms["detail"]),
         item("first_workflow", "Build your first workflow", f["workflows"] > 0,
              f"{a}/automation", "Build workflow", Perm.AUTOMATION_WRITE),
         item("first_deal", "Add your first deal", f["deals"] > 0,
@@ -180,6 +198,9 @@ def checklist(db: Session, ctx: AppContext, facts: dict | None = None) -> list[d
         item("create_segment", "Create a segment", f["segments"] > 0,
              f"{a}/audience/segments/new", "Create", Perm.AUDIENCE_WRITE, optional=True),
     ]
+    if not settings.SMS_ENABLED:  # SMS is "coming soon": no SMS step in the checklist
+        items = [i for i in items if i["key"] != "sms_setup"]
+    return items
 
 
 def overview(db: Session, ctx: AppContext) -> dict:
@@ -215,7 +236,8 @@ def overview(db: Session, ctx: AppContext) -> dict:
                   "ready": facts["verified_senders"] > 0, "setup_href": f"{a}/email/senders"},
         "sms": {"count_30d": _count(db, SmsMessage, SmsMessage.application_id == app_id,
                                     SmsMessage.created_at >= since),
-                "ready": sms["done"], "setup_href": sms["href"]},
+                "ready": sms["done"] and settings.SMS_ENABLED, "setup_href": sms["href"],
+                "coming_soon": not settings.SMS_ENABLED},
         "voice": {"count_30d": _count(db, VoiceCall, VoiceCall.application_id == app_id,
                                       VoiceCall.created_at >= since),
                   "ready": facts["voice_ready"], "setup_href": f"{a}/voice"},
@@ -239,7 +261,7 @@ def overview(db: Session, ctx: AppContext) -> dict:
         "segment_count": facts["segments"],
         "email": email,
         "channels": channels,
-        "modules": {"audience": True, "email": True, "sms": True, "voice": True, "analytics": True,
+        "modules": {"audience": True, "email": True, "sms": settings.SMS_ENABLED, "voice": True, "analytics": True,
                     "billing": True, "automation": True, "crm": True},
         "is_org_wide_role": Role(ctx.role) in ORG_WIDE_ROLES,
     }

@@ -72,7 +72,7 @@ def summary(db: Session, ctx, application_id: str | None = None) -> dict:
 def pricing(wallet_currency: str) -> list[dict]:
     """Platform prices shown in the wallet currency, so people can see what each channel costs."""
     rows = []
-    for country in ("IN", "US"):
+    for country in ("IN", "AE", "US"):
         e = settings.EMAIL_PRICING[country]
         s = settings.SMS_PRICING[country]
         v = settings.VOICE_PRICING[country]

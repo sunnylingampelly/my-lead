@@ -1,4 +1,4 @@
-"""Regional rules for the markets the platform targets first: India and the United States.
+"""Regional rules for the markets the platform targets first: India, the UAE and the United States.
 
 These are product defaults that encode widely known requirements. They are not legal advice;
 each business remains responsible for its own compliance. Other countries fall back to a
@@ -78,6 +78,39 @@ USA = RegionProfile(
     ),
 )
 
+UAE = RegionProfile(
+    code="AE",
+    name="United Arab Emirates",
+    currency="AED",
+    dial_code="+971",
+    default_timezone="Asia/Dubai",
+    # Calls 09:00-18:00 (Resolution 56/2024). Promotional SMS has its own 07:00-21:00 window (sms/rules.py).
+    marketing_window_start="09:00",
+    marketing_window_end="18:00",
+    sms_voice_requires_written_consent=True,
+    email_requires_postal_address=False,
+    sms_requires_dlt=False,
+    sms_requires_10dlc=False,
+    regulations=(
+        {"name": "TDRA unsolicited communications rules",
+         "summary": "Marketing email and SMS need opt-in consent, must say who is sending and must offer a free, "
+                    "easy way to opt out. Promotional SMS uses a sender ID starting with \"AD-\", comes only from "
+                    "UAE-licensed businesses, is not delivered from 21:00 to 07:00 UAE time, and the consent list "
+                    "is uploaded to TDRA's Consent Management System."},
+        {"name": "Telemarketing rules (Cabinet Resolution 56 of 2024)",
+         "summary": "Marketing calls only 09:00 to 18:00 UAE time from the business's own licensed UAE numbers. "
+                    "Calls are recorded with a notice at the start. If someone says no, never call them again; "
+                    "if they don't answer, retry at most once a day and twice a week. Never call numbers on the "
+                    "Do Not Call Registry (DNCR). Fines run from AED 10,000 to AED 150,000 per violation."},
+        {"name": "Personal Data Protection Law (Federal Decree-Law 45 of 2021)",
+         "summary": "Consent is the default basis for marketing. People can ask to see, delete or move their "
+                    "data, and data sent abroad needs safeguards. DIFC and ADGM have their own data laws."},
+        {"name": "UAE VAT",
+         "summary": "Signalcraft sells to UAE VAT-registered businesses. Invoices carry your TRN and no UAE VAT: "
+                    "you account for VAT under the reverse charge."},
+    ),
+)
+
 GENERIC = RegionProfile(
     code="XX",
     name="Other",
@@ -97,8 +130,14 @@ GENERIC = RegionProfile(
     ),
 )
 
-PROFILES = {"IN": INDIA, "US": USA}
-SUPPORTED_REGIONS = ("IN", "US")
+PROFILES = {"IN": INDIA, "AE": UAE, "US": USA}
+SUPPORTED_REGIONS = ("IN", "AE", "US")
+# Working days per market (Monday = 0). The UAE works Monday to Friday since 2022.
+BUSINESS_DAYS = {"IN": (0, 1, 2, 3, 4, 5), "AE": (0, 1, 2, 3, 4), "US": (0, 1, 2, 3, 4)}
+
+
+def business_days(country: str | None) -> tuple[int, ...]:
+    return BUSINESS_DAYS.get((country or "").upper(), (0, 1, 2, 3, 4))
 
 
 def profile_for(country: str | None) -> RegionProfile:
@@ -115,7 +154,8 @@ _COUNTRY_ALIASES = {
     "united states": "US", "united states of america": "US", "usa": "US", "us": "US", "u.s.": "US",
     "u.s.a.": "US", "america": "US", "+1": "US",
     "united kingdom": "GB", "uk": "GB", "great britain": "GB", "canada": "CA", "australia": "AU",
-    "singapore": "SG", "united arab emirates": "AE", "uae": "AE",
+    "singapore": "SG", "united arab emirates": "AE", "uae": "AE", "u.a.e.": "AE", "emirates": "AE",
+    "+971": "AE", "971": "AE", "dubai": "AE", "abu dhabi": "AE",
 }
 
 

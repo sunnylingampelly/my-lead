@@ -27,6 +27,7 @@ os.environ["RATE_LIMIT_ENABLED"] = "true"
 os.environ["RATE_LIMIT_AUTH_PER_MINUTE"] = "1000"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["ANTHROPIC_API_KEY"] = ""  # AI agents use the offline responder in tests
+os.environ["EMAIL_DNS_CHECKS_ENABLED"] = "false"  # no real DNS; domain tests switch it on with a mocked resolver
 
 import pytest  # noqa: E402
 from alembic import command  # noqa: E402
@@ -62,6 +63,13 @@ def _database():
     yield
     engine.dispose()
     shutil.rmtree(_TMP, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _sms_enabled(monkeypatch):
+    """SMS is "coming soon" in production (SMS_ENABLED=False); the suite tests it switched on by default.
+    Tests of the kill switch set it back to False."""
+    monkeypatch.setattr(settings, "SMS_ENABLED", True)
 
 
 @pytest.fixture(autouse=True)

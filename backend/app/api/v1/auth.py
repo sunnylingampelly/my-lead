@@ -8,13 +8,15 @@ from app.schemas.auth import (
     AuthResponse,
     EmailRequest,
     LoginRequest,
+    MfaChallengeOut,
+    MfaLoginRequest,
     RegisterRequest,
     ResetPasswordRequest,
     TokenRequest,
     UserOut,
 )
 from app.schemas.common import Message
-from app.services import auth_service, invitation_service
+from app.services import auth_service, invitation_service, mfa_service
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -36,10 +38,17 @@ def _clear_refresh_cookie(response: Response) -> None:
                            secure=settings.COOKIE_SECURE, httponly=True, samesite="strict")
 
 
-def _auth_response(response: Response, issued: auth_service.IssuedTokens) -> AuthResponse:
+def user_out(db, user) -> UserOut:
+    out = UserOut.model_validate(user)
+    out.mfa_setup_required = mfa_service.setup_required(db, user)
+    out.mfa_recommended = bool(user.is_platform_admin) and not user.mfa_enabled
+    return out
+
+
+def _auth_response(response: Response, issued: auth_service.IssuedTokens, db=None) -> AuthResponse:
     _set_refresh_cookie(response, issued.refresh_token)
-    return AuthResponse(access_token=issued.access_token, expires_in=issued.expires_in,
-                        user=UserOut.model_validate(issued.user))
+    user = user_out(db, issued.user) if db is not None else UserOut.model_validate(issued.user)
+    return AuthResponse(access_token=issued.access_token, expires_in=issued.expires_in, user=user)
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED,
@@ -61,12 +70,26 @@ def register(body: RegisterRequest, request: Request, response: Response, db: DB
     return _auth_response(response, issued)
 
 
-@router.post("/login", response_model=AuthResponse, dependencies=[Depends(rate_limit("login"))])
+@router.post("/login", response_model=AuthResponse | MfaChallengeOut, dependencies=[Depends(rate_limit("login"))])
 def login(body: LoginRequest, request: Request, response: Response, db: DB):
+    """Password sign-in. Accounts with two-factor authentication get `{"mfa_required": true,
+    "code": "MFA_REQUIRED", "mfa_token": ...}` instead of tokens; finish with POST /auth/login/mfa."""
     issued = auth_service.login(db, email=body.email, password=body.password,
                                 user_agent=request.headers.get("user-agent"), ip=ip_of(request))
     db.commit()
-    return _auth_response(response, issued)
+    if isinstance(issued, auth_service.MfaChallenge):
+        return MfaChallengeOut(mfa_token=issued.token, expires_in=mfa_service.CHALLENGE_TTL_SECONDS)
+    return _auth_response(response, issued, db)
+
+
+@router.post("/login/mfa", response_model=AuthResponse, dependencies=[Depends(rate_limit("login_mfa", 20))])
+def login_mfa(body: MfaLoginRequest, request: Request, response: Response, db: DB):
+    """Second sign-in step: the challenge token from /auth/login plus a 6-digit authenticator code or a
+    one-time recovery code. Five wrong codes in a row lock the second step for 15 minutes."""
+    issued = auth_service.complete_mfa_login(db, token=body.mfa_token, code=body.code,
+                                             user_agent=request.headers.get("user-agent"), ip=ip_of(request))
+    db.commit()
+    return _auth_response(response, issued, db)
 
 
 @router.post("/refresh", response_model=AuthResponse, dependencies=[Depends(rate_limit("refresh", 120))])
@@ -82,7 +105,7 @@ def refresh(request: Request, response: Response, db: DB):
         _clear_refresh_cookie(response)
         raise
     db.commit()
-    return _auth_response(response, issued)
+    return _auth_response(response, issued, db)
 
 
 @router.post("/logout", response_model=Message)

@@ -2,8 +2,8 @@
 
 * Stripe Checkout (USD): POST /v1/checkout/sessions; webhooks signed with the Stripe-Signature
   header, an HMAC-SHA256 of "{timestamp}.{raw body}" with the endpoint secret, with a tolerance window.
-* Razorpay Payment Links (INR): POST /v1/payment_links; webhooks signed with X-Razorpay-Signature,
-  an HMAC-SHA256 of the raw body with the webhook secret.
+* Razorpay Payment Links (INR, and AED as international payments): POST /v1/payment_links; webhooks signed
+  with X-Razorpay-Signature, an HMAC-SHA256 of the raw body with the webhook secret.
 
 Requests follow each provider's published API. They have not been run against the live services from
 this codebase; use test-mode keys first.
@@ -28,7 +28,7 @@ class Checkout:
 
 
 def minor_units(amount: Decimal) -> int:
-    """Paise or cents."""
+    """Paise, cents or fils: INR, USD and AED all have two decimal places."""
     return int((amount * 100).quantize(Decimal("1")))
 
 
@@ -77,10 +77,14 @@ def stripe_signature(secret: str, body: bytes, ts: int | None = None) -> str:
 
 
 def razorpay_link(key_id: str, key_secret: str, *, amount: Decimal, payment_id: str, org_name: str,
-                  callback_url: str, email: str | None) -> Checkout:
+                  callback_url: str, email: str | None, description: str | None = None,
+                  currency: str = "INR") -> Checkout:
+    """`amount` is what the customer pays (wallet credit plus GST). AED links are Razorpay international
+    payments (international payments must be activated on the account); amounts are in fils (x100)."""
     payload = {
-        "amount": minor_units(amount), "currency": "INR", "accept_partial": False,
-        "reference_id": payment_id[:40], "description": f"Wallet credit for {org_name}"[:2048],
+        "amount": minor_units(amount), "currency": currency.upper(), "accept_partial": False,
+        "reference_id": payment_id[:40],
+        "description": (f"{description} for {org_name}" if description else f"Wallet credit for {org_name}")[:2048],
         "notes": {"payment_id": payment_id}, "callback_url": callback_url, "callback_method": "get",
         "notify": {"email": False, "sms": False},
     }

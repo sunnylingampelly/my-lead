@@ -31,6 +31,8 @@ class OrganizationUpdate(BaseModel):
     industry: str | None = Field(default=None, max_length=80)
     website: HttpUrl | None = None
     country: str | None = Field(default=None, min_length=2, max_length=2)
+    # Require two-factor authentication for owners and admins.
+    require_mfa_admins: bool | None = None
 
 
 class OrganizationOut(ORMModel):
@@ -42,6 +44,7 @@ class OrganizationOut(ORMModel):
     website: str | None
     country: str | None
     created_at: datetime
+    require_mfa_admins: bool = False
 
 
 class MyOrganizationOut(OrganizationOut):
@@ -49,6 +52,8 @@ class MyOrganizationOut(OrganizationOut):
     role_label: str
     permissions: list[str]
     application_count: int = 0
+    # This owner/admin must set up two-factor before org admin actions work again.
+    mfa_setup_required: bool = False
     # Set when platform staff see this organization through a read-only support session.
     support_access_expires_at: datetime | None = None
 

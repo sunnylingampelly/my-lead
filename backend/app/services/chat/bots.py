@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.embed import normalise_domains
+from app.core.embed import validate_domains
 from app.core.errors import ValidationFailed
 from app.core.permissions import Perm
 from app.models import ApplicationSettings, Organization
@@ -160,13 +160,17 @@ def create_bot(db: Session, ctx, data: BotCreate) -> ChatBot:
     if data.template and t is None:
         raise ValidationFailed("Unknown template", code="UNKNOWN_TEMPLATE")
     t = t or TEMPLATES["website_assistant"]
+    domains = validate_domains([data.website])
+    if not domains:
+        raise ValidationFailed("Add the website where this chat will appear", code="DOMAIN_REQUIRED",
+                               details={"field": "website"})
     app_tz = getattr(ctx.application, "timezone", None) or "UTC"
     lead = LeadCapture(mode=t["lead_mode"]).model_dump()
     b = ChatBot(organization_id=ctx.organization_id, application_id=ctx.application_id, name=data.name.strip(),
                 public_key=secrets.token_urlsafe(18)[:24], status="draft", template=data.template if data.template
                 else None, instructions=t["instructions"], welcome_message=t["welcome"], quick_replies=list(t["chips"]),
                 language="auto", fallback=t["fallback"], lead_capture=lead,
-                business_hours=BusinessHours(timezone=app_tz).model_dump(), allowed_domains=[],
+                business_hours=BusinessHours(timezone=app_tz).model_dump(), allowed_domains=domains,
                 appearance=Appearance(title=data.name.strip()[:60]).model_dump(), proactive=Proactive().model_dump(),
                 routing="broadcast", routing_cursor=0, knowledge_chars=0,
                 created_by_id=ctx.user.id if ctx.user else None)
@@ -189,7 +193,7 @@ def update_bot(db: Session, ctx, bot_id: str, data: BotUpdate) -> ChatBot:
         if v is None and k not in ("avatar_url",):
             continue
         if k == "allowed_domains":
-            v = normalise_domains(v)
+            v = validate_domains(v)
         elif isinstance(v, str) and k != "instructions":
             v = v.strip()
         setattr(b, k, v)
@@ -207,6 +211,10 @@ def _validate_live(b: ChatBot) -> None:
         missing.append("a welcome message")
     if missing:
         raise ValidationFailed("Before going live, add " + " and ".join(missing), code="BOT_INCOMPLETE")
+    if not b.allowed_domains:
+        # A live bot spends the wallet on every AI reply, so it only runs on websites the owner listed.
+        raise ValidationFailed("Add the website where this chat will appear before going live",
+                               code="DOMAIN_REQUIRED", details={"field": "allowed_domains"})
 
 
 def set_status(db: Session, ctx, bot_id: str, live: bool) -> ChatBot:

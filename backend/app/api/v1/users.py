@@ -1,12 +1,26 @@
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
 
-from app.api.deps import DB, CurrentUser
+from app.api.deps import DB, CurrentUser, ip_of
+from app.api.v1.auth import user_out
 from app.core.errors import NotFound
+from app.core.rate_limit import rate_limit
 from app.models import UserSession
-from app.schemas.auth import ChangePasswordRequest, SessionOut, UpdateContextRequest, UpdateProfileRequest, UserOut
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    MfaCodeRequest,
+    MfaDisableRequest,
+    MfaSetupOut,
+    MfaStatusOut,
+    PasswordConfirmRequest,
+    RecoveryCodesOut,
+    SessionOut,
+    UpdateContextRequest,
+    UpdateProfileRequest,
+    UserOut,
+)
 from app.schemas.common import Message
-from app.services import audit_service, auth_service
+from app.services import audit_service, auth_service, mfa_service
 from app.services.tenancy import resolve_app_context, resolve_org_context
 from app.utils.time import utcnow
 
@@ -14,8 +28,8 @@ router = APIRouter(prefix="/users/me", tags=["Profile"])
 
 
 @router.get("", response_model=UserOut)
-def me(user: CurrentUser):
-    return UserOut.model_validate(user)
+def me(user: CurrentUser, db: DB):
+    return user_out(db, user)
 
 
 @router.patch("", response_model=UserOut)
@@ -26,7 +40,7 @@ def update_profile(body: UpdateProfileRequest, user: CurrentUser, db: DB):
         user.timezone = body.timezone
     audit_service.record(db, "user.profile_updated", actor_user_id=user.id, target_type="user", target_id=user.id)
     db.commit()
-    return UserOut.model_validate(user)
+    return user_out(db, user)
 
 
 @router.post("/password", response_model=Message)
@@ -50,7 +64,7 @@ def set_context(body: UpdateContextRequest, user: CurrentUser, db: DB):
             user.last_application_id = None
         user.last_organization_id = body.organization_id
     db.commit()
-    return UserOut.model_validate(user)
+    return user_out(db, user)
 
 
 @router.get("/sessions", response_model=list[SessionOut])
@@ -75,3 +89,46 @@ def revoke_session(session_id: str, user: CurrentUser, db: DB):
         raise NotFound("Session not found")
     auth_service.revoke_family(db, user.id, s.family_id, reason="user_revoked")
     db.commit()
+
+
+# ---------------------------------------------------------------- two-factor authentication
+
+@router.get("/mfa", response_model=MfaStatusOut)
+def mfa_status(user: CurrentUser, db: DB):
+    return MfaStatusOut(**mfa_service.status(db, user))
+
+
+@router.post("/mfa/setup", response_model=MfaSetupOut, dependencies=[Depends(rate_limit("mfa_setup", 10))])
+def mfa_setup(user: CurrentUser, db: DB):
+    """Start setup: a new secret as a QR code (SVG data URI) and a manual key. Nothing changes until it
+    is confirmed with POST /users/me/mfa/enable."""
+    out = mfa_service.start_setup(db, user)
+    db.commit()
+    return MfaSetupOut(**out)
+
+
+@router.post("/mfa/enable", response_model=RecoveryCodesOut, dependencies=[Depends(rate_limit("mfa_enable", 10))])
+def mfa_enable(body: MfaCodeRequest, request: Request, user: CurrentUser, db: DB):
+    """Confirm setup with a code from the app. Returns 10 one-time recovery codes, shown only this once.
+    Other sessions are signed out."""
+    codes = mfa_service.enable(db, user, body.code, current_session_id=getattr(request.state, "session_id", None),
+                               ip=ip_of(request))
+    db.commit()
+    return RecoveryCodesOut(recovery_codes=codes)
+
+
+@router.post("/mfa/recovery-codes", response_model=RecoveryCodesOut,
+             dependencies=[Depends(rate_limit("mfa_codes", 10))])
+def mfa_regenerate_codes(body: PasswordConfirmRequest, request: Request, user: CurrentUser, db: DB):
+    """Replace all recovery codes (the old ones stop working). Requires the password."""
+    codes = mfa_service.regenerate_recovery_codes(db, user, body.password, ip=ip_of(request))
+    db.commit()
+    return RecoveryCodesOut(recovery_codes=codes)
+
+
+@router.post("/mfa/disable", response_model=Message, dependencies=[Depends(rate_limit("mfa_disable", 10))])
+def mfa_disable(body: MfaDisableRequest, request: Request, user: CurrentUser, db: DB):
+    """Turn two-factor off. Requires the password and a current code (or a recovery code)."""
+    mfa_service.disable(db, user, body.password, body.code, ip=ip_of(request))
+    db.commit()
+    return Message(message="Two-factor authentication is off")

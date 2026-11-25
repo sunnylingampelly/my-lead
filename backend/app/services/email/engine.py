@@ -79,7 +79,7 @@ def launch(campaign_id: str, max_wait_seconds: float = 0) -> str:
         if c.status == "queued":
             ctx = _task_ctx(db, c)
             checks, _ = readiness(db, ctx, c)
-            failing = [ch for ch in checks if not ch.ok]
+            failing = [ch for ch in checks if not ch.ok and not ch.warning]
             if failing:
                 c.status, c.error = "failed", "; ".join(f"{ch.label}: {ch.detail}" for ch in failing)[:500]
                 notify(db, c.created_by_id, type_="campaign_failed", level="error", title=f"Campaign failed: {c.name}",

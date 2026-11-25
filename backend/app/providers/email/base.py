@@ -17,6 +17,8 @@ class OutboundEmail:
     tags: tuple[str, ...] = ()
     # Stable key so a retried task can be recognised by providers or by our own records.
     idempotency_key: str | None = None
+    # (filename, content type, bytes), e.g. an invoice PDF. Used by system email only.
+    attachments: tuple[tuple[str, str, bytes], ...] = ()
 
 
 @dataclass(frozen=True)

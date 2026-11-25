@@ -296,6 +296,18 @@ def advance(db: Session, w: Workflow, run: WorkflowRun) -> None:
             detail = run_action(db, w.organization_id, w.application_id, data(node), contact, meta)
             _step(db, run, node, "done", detail, meta)
             nxt = g.next(node["id"])
+        elif t == "ai_step":
+            from app.services.ai_team.workflow_nodes import run_ai_step
+
+            outcome, detail = run_ai_step(db, w.organization_id, w.application_id, data(node), contact)
+            _step(db, run, node, outcome, detail)
+            nxt = g.next(node["id"])
+        elif t == "slack_message":
+            from app.services.ai_team.workflow_nodes import run_slack
+
+            outcome, detail = run_slack(db, w.organization_id, data(node), contact)
+            _step(db, run, node, outcome, detail)
+            nxt = g.next(node["id"])
         else:
             _step(db, run, node, "skipped", f"Unsupported step {t}")
             nxt = g.next(node["id"])
@@ -411,6 +423,11 @@ def dry_run(db: Session, w: Workflow, graph: dict, contact: Contact) -> list[dic
         elif t == "crm_action":
             step.update(outcome="would_do",
                         detail=preview_action(db, w.organization_id, w.application_id, data(node), contact))
+        elif t in ("ai_step", "slack_message"):
+            from app.services.ai_team import workflow_nodes
+
+            step.update(outcome="would_do", detail=workflow_nodes.preview_ai_step(data(node)) if t == "ai_step"
+                        else workflow_nodes.preview_slack(data(node), contact))
         else:
             step.update(outcome="skipped", detail=f"Unsupported step {t}")
         out.append(step)

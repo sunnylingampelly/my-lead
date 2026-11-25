@@ -163,9 +163,12 @@ def send_email(db: Session, campaign: EmailCampaign, contact: Contact) -> SendRe
 
 
 def send_sms(db: Session, campaign: SmsCampaign, contact: Contact) -> SendResult:
+    from app.core.config import settings
     from app.providers.sms.factory import provider_for
     from app.services.sms import engine
 
+    if not settings.SMS_ENABLED:  # SMS is "coming soon": existing SMS steps are skipped safely
+        return SendResult("skipped", "SMS is coming soon")
     snap = campaign.sender_snapshot or {}
     if not contact.phone:
         return SendResult("skipped", "No phone number")

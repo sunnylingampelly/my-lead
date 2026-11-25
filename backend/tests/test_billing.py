@@ -197,7 +197,7 @@ def test_analytics_cross_channel_and_csv(india):
     assert d["top_campaigns"][0]["name"] == "Offer" and d["top_campaigns"][0]["rate"] == 50.0
     csv = a.client.get(f"/api/v1{a.base}/analytics/export.csv", headers=a.headers)
     assert csv.status_code == 200 and csv.text.splitlines()[0].startswith("date,email_sent")
-    assert csv.text.splitlines()[-1].startswith("total,2.0,2.0,1.0")
+    assert any(line.startswith("total,2.0,2.0,1.0") for line in csv.text.splitlines())
     bad = a.get(f"{a.base}/analytics?start=2026-05-01&end=2026-01-01")
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "INVALID_RANGE"
     assert a.get(f"{a.base}/analytics?start=2024-01-01&end=2026-01-01").status_code == 422

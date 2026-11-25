@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import Forbidden, NotFound
-from app.core.permissions import ORG_WIDE_ROLES, ROLE_RANK, Perm, Role, permissions_for
+from app.core.permissions import MFA_GATED_PERMS, ORG_WIDE_ROLES, ROLE_RANK, Perm, Role, permissions_for
 from app.models import Application, ApplicationMember, Organization, OrganizationMember, User
 
 
@@ -24,6 +24,9 @@ class OrgContext:
     permissions: frozenset[Perm]
     # True when platform staff are viewing through a read-only support session.
     support: bool = False
+    # The organization requires 2FA for owners/admins and this owner/admin has not set it up: org admin
+    # permissions (MFA_GATED_PERMS) are withheld until they do.
+    mfa_setup_required: bool = False
 
     @property
     def organization_id(self) -> str:
@@ -38,8 +41,22 @@ class OrgContext:
 
     def require(self, perm: Perm) -> None:
         if perm not in self.permissions:
+            if self.mfa_setup_required and perm in MFA_GATED_PERMS:
+                raise Forbidden("Your organization requires two-factor authentication for owners and admins. "
+                                "Turn it on in Account → Security to continue.", code="MFA_SETUP_REQUIRED",
+                                details={"required": perm.value})
             raise Forbidden("You do not have permission to perform this action", code="PERMISSION_DENIED",
                             details={"required": perm.value})
+
+
+def mfa_gate(org: Organization, role: Role, user: User) -> bool:
+    """True when this member must set up 2FA before using org admin permissions."""
+    return bool(org.require_mfa_admins) and role in (Role.OWNER, Role.ADMIN) and not user.mfa_enabled
+
+
+def effective_permissions(org: Organization, role: Role, user: User) -> frozenset[Perm]:
+    perms = permissions_for(role)
+    return perms - MFA_GATED_PERMS if mfa_gate(org, role, user) else perms
 
 
 @dataclass(frozen=True)
@@ -75,7 +92,8 @@ def resolve_org_context(db: Session, user: User, organization_id: str) -> OrgCon
     _check_org_active(org)
     role = Role(membership.role_key)
     return OrgContext(user=user, organization=org, membership=membership, role=role,
-                      permissions=permissions_for(role))
+                      permissions=effective_permissions(org, role, user),
+                      mfa_setup_required=mfa_gate(org, role, user))
 
 
 def effective_app_role(org_role: Role, app_member: ApplicationMember | None) -> Role | None:
@@ -124,7 +142,8 @@ def resolve_app_context(db: Session, user: User, application_id: str) -> AppCont
     if role is None:
         raise NotFound("Application not found")
     return AppContext(user=user, organization=org, membership=membership, role=role,
-                      permissions=permissions_for(role), application=app)
+                      permissions=effective_permissions(org, role, user), application=app,
+                      mfa_setup_required=mfa_gate(org, role, user))
 
 
 def active_support_grant(db: Session, user: User, organization_id: str):

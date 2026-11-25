@@ -145,6 +145,8 @@ class ContactCreate(ContactBase, ContactCrmFields):
 class ContactUpdate(ContactBase, ContactCrmFields):
     status: ContactStatus | None = None
     clear_owner: bool = False
+    # The number is on the UAE Do Not Call Registry (never called).
+    dncr_registered: bool | None = None
 
 
 class ConsentChange(BaseModel):
@@ -201,6 +203,7 @@ class ContactDetail(ContactListItem):
     email_unsubscribed_at: datetime | None
     sms_unsubscribed_at: datetime | None
     voice_unsubscribed_at: datetime | None
+    dncr_registered: bool = False
     jurisdiction: str | None
     jurisdiction_name: str
     eligibility: dict[str, Eligibility]

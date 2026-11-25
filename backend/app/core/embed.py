@@ -54,16 +54,42 @@ def normalise_domains(domains: list[str] | None) -> list[str]:
     return out
 
 
-def origin_allowed(origin: str | None, allowed_domains: list[str] | None) -> bool:
-    """An empty allow-list means any website. 'example.com' also covers 'www.example.com';
-    '*.example.com' covers every subdomain. Our own app origins are always allowed (previews, hosted pages)."""
+def validate_domains(domains: list[str] | None, *, limit: int = 20) -> list[str]:
+    """Normalise a list of websites typed by a person, refusing entries that aren't a real hostname."""
+    from app.core.errors import ValidationFailed
+
+    out: list[str] = []
+    for raw in domains or []:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        norm = normalise_domains([raw])
+        host = norm[0].removeprefix("*.") if norm else ""
+        labels = host.split(".")
+        ok = host == "localhost" or (
+            len(labels) >= 2 and all(0 < len(p) <= 63 for p in labels)
+            and all(c.isalnum() or c == "-" for p in labels for c in p) and not labels[-1].isdigit())
+        if not ok:
+            raise ValidationFailed(f"“{raw}” isn't a website address. Use a domain like example.com.",
+                                   code="INVALID_DOMAIN", details={"field": "allowed_domains", "value": raw})
+        if norm[0] not in out:
+            out.append(norm[0])
+    if len(out) > limit:
+        raise ValidationFailed(f"Add at most {limit} websites", code="TOO_MANY_DOMAINS")
+    return out
+
+
+def origin_allowed(origin: str | None, allowed_domains: list[str] | None, *, empty_means_any: bool = True) -> bool:
+    """'example.com' also covers 'www.example.com'; '*.example.com' covers every subdomain. Our own app origins
+    are always allowed (previews, hosted pages). An empty allow-list means any website unless
+    `empty_means_any=False` (chatbots: each AI reply costs money, so they only run where the owner said)."""
     domains = normalise_domains(allowed_domains)
     host = host_of(origin)
     own = {host_of(settings.FRONTEND_URL), host_of(settings.BACKEND_PUBLIC_URL)}
     if host and host in own:
         return True
     if not domains:
-        return True
+        return empty_means_any
     if not host:
         return False
     for d in domains:
@@ -76,12 +102,12 @@ def origin_allowed(origin: str | None, allowed_domains: list[str] | None) -> boo
     return False
 
 
-def frame_ancestors(allowed_domains: list[str] | None) -> str:
+def frame_ancestors(allowed_domains: list[str] | None, *, empty_means_any: bool = True) -> str:
     """CSP value letting the customer's pages (and our app, for previews) frame an embed page."""
     domains = normalise_domains(allowed_domains)
     own = " ".join(o for o in {settings.FRONTEND_URL.rstrip("/"), settings.BACKEND_PUBLIC_URL.rstrip("/")} if o)
     if not domains:
-        return "frame-ancestors *"
+        return "frame-ancestors *" if empty_means_any else f"frame-ancestors 'self' {own}"
     srcs = []
     for d in domains:
         srcs += [f"https://{d}", f"http://{d}"] + ([] if d.startswith("*.") else [f"https://www.{d}"])

@@ -23,9 +23,9 @@ TRIGGER_NAMES = {
 # Display names for step types (run history, issues and dry runs).
 STEP_NAMES = {"trigger": "Trigger", "send_email": "Send email", "send_sms": "Send SMS", "voice_call": "Voice call",
               "wait": "Wait", "condition": "Condition", "split": "A/B split", "update_contact": "Update contact",
-              "crm_action": "CRM action", "end": "End"}
+              "crm_action": "CRM action", "ai_step": "AI step", "slack_message": "Send to Slack", "end": "End"}
 NODE_TYPES = ("trigger", "send_email", "send_sms", "voice_call", "wait", "condition", "split", "update_contact",
-              "crm_action", "end")
+              "crm_action", "ai_step", "slack_message", "end")
 SEND_TYPES = ("send_email", "send_sms", "voice_call")
 # Which outgoing handles each node type has. None = a single unnamed output.
 HANDLES = {"condition": ("yes", "no"), "split": ("a", "b"), "end": ()}

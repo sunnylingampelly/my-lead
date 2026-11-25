@@ -87,7 +87,7 @@ def chat(owner):
 
 
 def new_bot(a, template: str = "website_assistant", name: str = "Acme Helper", live: bool = True) -> dict:
-    r = a.post(f"{a.c}/bots", json={"name": name, "template": template})
+    r = a.post(f"{a.c}/bots", json={"name": name, "template": template, "website": "shop.example.com"})
     assert r.status_code == 201, r.text
     bot = r.json()
     if live:
@@ -123,7 +123,7 @@ def test_bot_crud_templates_and_chatbot_limit(chat):
     assert bot["snippet"] == (f'<script src="{settings.BACKEND_PUBLIC_URL.rstrip("/")}/embed/chat.js" '
                               f'data-bot="{bot["public_key"]}" async></script>')
     # Starter allows one chatbot.
-    r = chat.post(f"{chat.c}/bots", json={"name": "Second"})
+    r = chat.post(f"{chat.c}/bots", json={"name": "Second", "website": "shop.example.com"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "PLAN_LIMIT"
 
     r = chat.patch(f"{chat.c}/bots/{bot['id']}", json={
@@ -149,7 +149,8 @@ def test_bot_crud_templates_and_chatbot_limit(chat):
     assert len(chat.get(f"{chat.c}/bots").json()) == 1
 
     make_pro(chat.org["id"])
-    assert chat.post(f"{chat.c}/bots", json={"name": "Second", "template": "ecommerce"}).status_code == 201
+    assert chat.post(f"{chat.c}/bots", json={"name": "Second", "template": "ecommerce",
+                                             "website": "shop.example.com"}).status_code == 201
     pro_bot = chat.get(f"{chat.c}/bots").json()[0]
     assert pro_bot["branding_hidden"] is True
     assert chat.delete(f"{chat.c}/bots/{bot['id']}").status_code == 204
@@ -748,3 +749,30 @@ def test_html_extraction_and_markers():
     assert out == "Connecting you " and ai.HANDOFF in f.found
     assert ai.api_messages([{"role": "bot", "body": "Welcome"}, {"role": "visitor", "body": "a"},
                             {"role": "visitor", "body": "b"}]) == [{"role": "user", "content": "a\n\nb"}]
+
+
+def test_bot_needs_a_website_and_only_runs_there(chat):
+    """Chatbots spend the wallet on every AI reply, so each one is tied to the owner's websites: one is required
+    to create it and to go live, and a bot with none listed runs only on Signalcraft's own preview pages."""
+    r = chat.post(f"{chat.c}/bots", json={"name": "No site"})
+    assert r.status_code == 422
+    r = chat.post(f"{chat.c}/bots", json={"name": "Bad site", "website": "not a website"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "INVALID_DOMAIN"
+    r = chat.post(f"{chat.c}/bots", json={"name": "Shop", "website": "https://www.Shop.Example.com/contact"})
+    assert r.status_code == 201, r.text
+    bot = r.json()
+    assert bot["allowed_domains"] == ["www.shop.example.com"]
+    # Removing every website: a draft may, but it can't go live like that, and a live bot can't drop them all.
+    assert chat.patch(f"{chat.c}/bots/{bot['id']}", json={"allowed_domains": []}).status_code == 200
+    r = chat.post(f"{chat.c}/bots/{bot['id']}/publish")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "DOMAIN_REQUIRED"
+    # With no websites listed, other sites get nothing; our own preview still works.
+    assert Visitor(bot["public_key"], "https://anyone.example.net").call("GET", "/config").status_code in (403, 404)
+    own = Visitor(bot["public_key"], settings.BACKEND_PUBLIC_URL)
+    assert own.call("GET", "/config").status_code == 200
+    assert chat.patch(f"{chat.c}/bots/{bot['id']}", json={"allowed_domains": ["shop.example.com"]}).status_code == 200
+    assert chat.post(f"{chat.c}/bots/{bot['id']}/publish").status_code == 200
+    r = chat.patch(f"{chat.c}/bots/{bot['id']}", json={"allowed_domains": []})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "DOMAIN_REQUIRED"
+    r = chat.patch(f"{chat.c}/bots/{bot['id']}", json={"allowed_domains": ["shop.example.com", "bad_site!.com"]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "INVALID_DOMAIN"

@@ -26,6 +26,7 @@ from app.models.voice import VoiceCall, VoiceCampaign
 from app.providers.voice.base import OutboundCall, TransientVoiceError, VoiceProvider
 from app.providers.voice.factory import provider_for
 from app.providers.voice.simulation import simulated_outcome
+from app.services import uae
 from app.services.audience.import_processor import TaskContext
 from app.services.audience.query import base_query, eligibility_condition
 from app.services.email import render, tokens
@@ -203,6 +204,8 @@ def _ineligible(contact: Contact | None, call: VoiceCall, suppressed: set[str]) 
         return "Contact is blocked"
     if contact.phone_country != call.country:
         return "Number is not in this campaign's country"
+    if contact.dncr_registered:
+        return "Number is on the UAE Do Not Call Registry (DNCR)"
     return None
 
 
@@ -224,6 +227,18 @@ def _place_batch(db: Session, c: VoiceCampaign, app: Application, quiet: tuple[s
         if reason:
             call.status, call.error_code, call.error_message = "skipped", "ineligible", reason
             continue
+        if call.country == "AE" or uae.is_uae_number(call.to_phone):
+            blocked = uae.voice_blocked("AE")
+            if blocked:  # kill switch: VOICE_UAE_ENABLED
+                call.status, call.error_code, call.error_message = "skipped", "uae_voice_disabled", blocked
+                continue
+            why, retry_at = rules.uae_contact_block(db, contact, utcnow())
+            if why and retry_at is None:  # DNCR or an earlier refusal: never
+                call.status, call.error_code, call.error_message = "skipped", "uae_do_not_call", why
+                continue
+            if retry_at is not None:  # retry limits across campaigns and workflows
+                call.status, call.next_attempt_at, call.deferred_reason = "deferred", retry_at, "uae_retry_limit"
+                continue
         resume_at = rules.next_allowed(utcnow(), contact.timezone or app.timezone, call.country, c.category, quiet)
         if resume_at is not None:
             call.status, call.next_attempt_at, call.deferred_reason = "deferred", resume_at, "calling_window"
@@ -301,7 +316,7 @@ def _simulate_ai(db: Session, call: VoiceCall, snap: dict, contact: Contact | No
                  answered_by="machine" if machine else "human")
     agent = snap.get("agent") or {}
     values = ai.values_for(None, snap.get("business_name") or "us", contact)
-    transcript = [{"role": "assistant", "text": ai.greeting_for(agent, values), "at": utcnow().isoformat()}]
+    transcript = [{"role": "assistant", "text": script.agent_greeting(snap, values), "at": utcnow().isoformat()}]
     if not machine:
         for line in simulated_caller_lines(outcome, contact.first_name if contact else None):
             transcript.append({"role": "user", "text": line, "at": utcnow().isoformat()})

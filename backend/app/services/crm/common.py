@@ -35,7 +35,9 @@ DEFAULT_LOST_REASONS = ("Price too high", "Chose a competitor", "No budget", "No
 
 def currency_for(ctx) -> str:
     country = (getattr(ctx.application, "default_country", None) or "").upper()
-    return "INR" if country == "IN" or not country else "USD"
+    if country == "IN" or not country:
+        return "INR"
+    return "AED" if country == "AE" else "USD"
 
 
 def audit(db: Session, ctx, action: str, target_type: str, target_id: str, summary: str, meta: dict | None = None):

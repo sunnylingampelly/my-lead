@@ -20,4 +20,9 @@ boto3==1.44.4
 phonenumbers==9.0.43
 mutagen==1.47.0
 anthropic==2.10.0
+openai==3.49.0  # AI Team (assistant, agents, automation AI step): Responses API
 pypdf==7.1.1  # chatbot knowledge: text from uploaded PDFs
+fpdf2==2.9.0  # GST tax invoices and usage statements (PDF)
+dnspython==2.9.2  # sender domain authentication checks (SPF, DKIM, DMARC, MX)
+segno==1.6.6  # two-factor setup: QR code (SVG) for authenticator apps; pure Python
+sentry-sdk[fastapi]==2.74.0  # error tracking, only active when SENTRY_DSN is set

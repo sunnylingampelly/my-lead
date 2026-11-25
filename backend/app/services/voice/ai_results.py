@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.models import Application, Contact, CrmActivity
 from app.models.voice import VoiceCall, VoiceCampaign
 from app.schemas.crm import TaskCreate
+from app.services import uae
 from app.services.crm.common import contact_name, record_event, system_ctx
 from app.services.voice import ai, events
 from app.utils.time import utcnow
@@ -87,6 +88,9 @@ def process_call(db: Session, call: VoiceCall) -> bool:
         _to_crm(db, call, campaign, contact, out)
     if out.get("do_not_call"):
         events.opt_out(db, call, method="ai_call", source="Asked not to be called again during an AI call")
+    elif call.country == "AE" and out.get("interest") in uae.REFUSAL_INTERESTS:
+        # UAE (Resolution 56/2024): a refusal means the contact is never called for marketing again.
+        events.opt_out(db, call, method="ai_call", source="Refused during an AI call (UAE: never call again)")
     return True
 
 
