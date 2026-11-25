@@ -109,7 +109,7 @@ test('AI Team: assistant answers and confirms, agents report to Slack, approvals
 
   // The simulated Slack log has the report and the approval request (now marked approved).
   // Simulation charged nothing: no AI transactions in billing.
-  const txs = await page.request.get(`/api/v1/apps/${appId}/billing/transactions`, { headers })
+  const txs = await page.request.get(`/api/v1/apps/${appId}/billing/transactions`, { headers: { Authorization: `Bearer ${await apiToken(page)}` } })
   const txBody = (await txs.json()) as { items: { channel: string | null }[] }
   expect(txBody.items.filter((t) => t.channel === 'ai')).toHaveLength(0)
 

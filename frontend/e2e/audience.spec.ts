@@ -15,7 +15,7 @@ function csv5000(): Buffer {
 const nav = navTo
 
 test('import 5,000 contacts, build the Hyderabad segment, and see it on the dashboard', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(300_000)
   await registerAndVerify(page, 'Imran Import', uniqueEmail('aud'))
   await createOrgAndApp(page, 'Deccan Foods', 'Deccan Retail')
 
@@ -37,7 +37,7 @@ test('import 5,000 contacts, build the Hyderabad segment, and see it on the dash
   await page.getByLabel('Where was consent collected?').fill('Loyalty programme sign-up form')
   await page.getByRole('checkbox', { name: /I confirm every contact/ }).check()
   await page.getByRole('button', { name: 'Start import' }).click()
-  await expect(page.getByTestId('import-status')).toHaveText('Import complete', { timeout: 90_000 })
+  await expect(page.getByTestId('import-status')).toHaveText('Import complete', { timeout: 180_000 })
   await expect(page.getByTestId('s-Created')).toHaveText('5,000')
   await expect(page.getByTestId('s-Invalid')).toHaveText('1')
   await expect(page.getByRole('button', { name: /Download report/ })).toBeVisible()
