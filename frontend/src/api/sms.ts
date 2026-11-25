@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { http } from './client'
 import type { Page } from '@/types/api'
-import type { CampaignAudience, Estimate } from '@/types/email'
+import type { CampaignAudience, Estimate, RecipientIds } from '@/types/email'
 import type {
   DltConfig,
   SmsCampaign,
@@ -40,7 +40,8 @@ export const smsApi = (appId: string) => {
 
     campaigns: (p: Paging) => data(http.get<Page<SmsCampaignListItem>>(`${b}/campaigns`, clean(p))),
     campaign: (id: string) => data(http.get<SmsCampaign>(`${b}/campaigns/${id}`)),
-    createCampaign: (body: { name: string; category?: string; template_id?: string | null }) => data(http.post<SmsCampaign>(`${b}/campaigns`, body)),
+    createCampaign: (body: { name: string; category?: string; template_id?: string | null; audience?: CampaignAudience }) => data(http.post<SmsCampaign>(`${b}/campaigns`, body)),
+    recipientIds: (id: string, status?: string) => data(http.get<RecipientIds>(`${b}/campaigns/${id}/recipients/ids`, { params: status ? { status } : {} })),
     updateCampaign: (id: string, body: Partial<SmsCampaign>) => data(http.patch<SmsCampaign>(`${b}/campaigns/${id}`, body)),
     deleteCampaign: (id: string) => data(http.delete(`${b}/campaigns/${id}`)),
     duplicateCampaign: (id: string) => data(http.post<SmsCampaign>(`${b}/campaigns/${id}/duplicate`)),

@@ -12,8 +12,7 @@ class OutboundSms:
     unicode: bool = False
     dlt_template_id: str | None = None
     dlt_entity_id: str | None = None
-    messaging_service_sid: str | None = None
-    status_callback: str | None = None
+    country: str = ""  # sender country (IN or US); decides India DLT vs US origination number
     idempotency_key: str | None = None
 
 

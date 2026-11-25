@@ -199,9 +199,8 @@ def test_restart_after_crash_creates_no_duplicates(app_in, monkeypatch):
     r = a.post(f"{a.base}/imports/{imp['id']}/start", json={"mapping": MAPPING, "options": {}})
     assert r.status_code == 200  # the request only queues work; the worker crash happens in the background
     partial = a.get(f"{a.base}/imports/{imp['id']}").json()
-    from app.core.config import settings
 
-    first_chunk = import_processor.SQLITE_CHUNK if settings.is_sqlite else import_processor.CHUNK
+    first_chunk = import_processor.CHUNK
     assert partial["status"] == "processing" and partial["processed_rows"] == first_chunk
 
     monkeypatch.setattr(import_processor, "_chunk", real_chunk)

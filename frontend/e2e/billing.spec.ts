@@ -27,21 +27,129 @@ test('wallet with trial credit, test top-up, ledger, and analytics with export',
   expect((await download).suggestedFilename()).toBe('wallet-transactions.csv')
   await shot(page, 'b1-billing')
 
-  // The application view of the same wallet.
-  await navTo(page, 'Billing & usage')
-  await expect(page.getByRole('heading', { name: 'Billing & usage', level: 1 })).toBeVisible()
+  // The header always shows what the wallet can spend, and links back to Billing.
+  await expect(page.getByTestId('wallet-chip')).toContainText('₹1,500.00')
+
+  // One Billing page: the application has a usage card on its overview that opens Billing filtered to it,
+  // and the old per-application billing address redirects there.
+  await expect(page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Billing & usage' })).toHaveCount(0)
+  await navTo(page, 'Overview')
+  await expect(page.getByTestId('usage-card')).toContainText('Nothing charged yet this month')
+  await expect(page.getByTestId('usage-card')).toContainText('₹1,500.00')
+  await page.getByTestId('usage-card').getByRole('link', { name: 'Open billing' }).click()
+  await expect(page.getByRole('heading', { name: 'Billing', level: 1 })).toBeVisible()
+  await expect(page).toHaveURL(/\/billing\?app=/)
+  await expect(page.getByTestId('tx-empty')).toContainText('No charges by Chai Billing yet')
+  const appId = (await page.url()).match(/app=([^&]+)/)![1]
+  await page.goto(`/apps/${appId}/billing`)
+  await expect(page).toHaveURL(new RegExp(`/billing\\?app=${appId}`))
   await expect(page.getByTestId('wallet-kpis')).toContainText('₹1,500.00')
 
-  // Analytics: presets, table view and CSV export.
+  // Analytics: nothing has been sent yet, so the page guides the next steps instead of showing zeros;
+  // presets, the custom range and CSV export still work.
   await navTo(page, 'Analytics')
-  await expect(page.getByTestId('analytics-kpis')).toContainText('Emails sent')
+  await expect(page.getByTestId('analytics-empty')).toContainText('Nothing to measure in this period yet')
+  await expect(page.getByTestId('analytics-empty')).toContainText('Send your first campaign')
+  await expect(page.getByTestId('analytics-kpis')).toHaveCount(0)
   await page.getByRole('radio', { name: 'Last 7 days' }).click()
-  await page.getByRole('button', { name: 'Show table' }).click()
-  await expect(page.getByRole('row')).toHaveCount(8) // header + 7 days
+  await expect(page.getByRole('radio', { name: 'Last 7 days' })).toBeChecked()
+  await expect(page.getByTestId('analytics-empty')).toBeVisible()
   await page.getByRole('radio', { name: 'Custom' }).click()
   await expect(page.getByLabel('Start date')).toBeVisible()
   const csv = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Export CSV' }).click()
   expect((await csv).suggestedFilename()).toMatch(/^analytics.*\.csv$/)
   await shot(page, 'b2-analytics')
+})
+
+test('plans: upgrade to Pro from the wallet, schedule and undo a switch to Starter', async ({ page }) => {
+  test.setTimeout(120_000)
+  await registerAndVerify(page, 'Pia Plans', uniqueEmail('plan'))
+  await createOrgAndApp(page, 'Chai Plans', 'Chai Pro')
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Billing', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('heading', { name: 'Billing', level: 1 })).toBeVisible()
+  const plan = page.getByTestId('plan-section')
+  await expect(plan.getByTestId('current-plan')).toHaveText(/Starter/)
+  await expect(plan.getByTestId('plan-card-pro')).toContainText('₹2,999.00')
+  await expect(plan.getByTestId('plan-usage')).toContainText('Applications')
+  await expect(plan.getByTestId('plan-usage')).toContainText('1 / 2')
+
+  // Not enough credit yet (trial ₹1,000): the dialog says so and the server refuses.
+  await plan.getByTestId('upgrade-pro').click()
+  await expect(page.getByRole('alertdialog')).toContainText('₹2,999.00 will be charged from your wallet now')
+  await expect(page.getByRole('alertdialog')).toContainText('too low')
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click()
+
+  await page.getByRole('button', { name: 'Add test credit' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '₹10,000.00' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Add credit' }).click()
+  await expect(page.getByTestId('wallet-kpis')).toContainText('₹11,000.00')
+
+  await plan.getByTestId('upgrade-pro').click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Pay ₹2,999.00' }).click()
+  await expect(plan.getByTestId('current-plan')).toHaveText(/Pro/)
+  await expect(plan.getByTestId('next-charge')).toContainText('₹2,999.00')
+  await expect(page.getByTestId('wallet-kpis')).toContainText('₹8,001.00')
+  await expect(page.getByTestId('tx-row').first()).toContainText('Plan')
+  await expect(page.getByTestId('plan-badge')).toHaveCount(1)
+
+  // Switching to Starter is scheduled for the end of the period and can be undone.
+  await plan.getByTestId('switch-starter').click()
+  await expect(page.getByRole('alertdialog')).toContainText('Nothing is charged now')
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Switch to Starter' }).click()
+  await expect(plan.getByTestId('plan-scheduled')).toBeVisible()
+  await expect(plan.getByTestId('next-charge')).toContainText('No renewal')
+  await plan.getByRole('button', { name: 'Keep Pro' }).click()
+  await expect(plan.getByTestId('plan-scheduled')).toHaveCount(0)
+  await expect(plan.getByTestId('next-charge')).toContainText('₹2,999.00')
+
+  // Phone width: no horizontal scroll.
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(0)
+  await shot(page, 'b3-plans')
+})
+
+test('GST: plan prices exclude GST, billing details at 390px, invoices and statements', async ({ page }) => {
+  test.setTimeout(120_000)
+  await registerAndVerify(page, 'Gita Gst', uniqueEmail('gst'))
+  await createOrgAndApp(page, 'Chai Gst', 'Chai Tax')
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Billing', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('heading', { name: 'Billing', level: 1 })).toBeVisible()
+  await expect(page.getByTestId('plan-price-pro')).toContainText('₹2,999.00')
+  await expect(page.getByTestId('plan-price-pro')).toContainText('/month + GST')
+
+  // Billing details: the checksum is validated in the browser, then saved.
+  await page.getByTestId('tab-billing-details').click()
+  const form = page.getByTestId('billing-details')
+  await form.getByLabel('Legal name').fill('Chai Gst Private Limited')
+  await form.getByLabel('GSTIN (optional)').fill('27AAPFU0939F1ZX')
+  await form.getByLabel('Email for invoices').fill('accounts@chai-gst.example')
+  await form.getByLabel('Billing address').fill('12 Marine Drive\nFort')
+  await form.getByLabel('City').fill('Mumbai')
+  await form.getByLabel('State (place of supply)').selectOption('27')
+  await form.getByLabel('PIN code').fill('400001')
+  await form.getByTestId('bd-save').click()
+  await expect(form).toContainText('This GSTIN is not valid')
+  await form.getByLabel('GSTIN (optional)').fill('27aapfu0939f1zv')
+  await expect(form.getByLabel('GSTIN (optional)')).toHaveValue('27AAPFU0939F1ZV')
+  await form.getByTestId('bd-save').click()
+  await expect(page.getByText('Billing details saved')).toBeVisible()
+  await page.reload()
+  await expect(page).toHaveURL(/tab=details/)
+  await expect(page.getByTestId('billing-details').getByLabel('Legal name')).toHaveValue('Chai Gst Private Limited')
+  let overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(0)
+  await shot(page, 'b4-billing-details-390')
+
+  // Simulation test credit is not a payment: no tax invoice.
+  await page.getByTestId('tab-invoices').click()
+  await expect(page.getByTestId('invoices')).toContainText('No invoices yet')
+  await page.getByTestId('tab-statements').click()
+  const st = page.waitForEvent('download')
+  await page.getByTestId('statement-csv').click()
+  expect((await st).suggestedFilename()).toMatch(/^usage-statement-\d{4}-\d{2}\.csv$/)
+  overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(0)
 })

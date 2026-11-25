@@ -3,8 +3,29 @@ sourceHandle}]}. Graphs are data only: node types come from a fixed list and not
 ever evaluated as code."""
 from dataclasses import dataclass, field
 
-TRIGGERS = ("contact_created", "added_to_list", "tag_added", "segment_entered")
-NODE_TYPES = ("trigger", "send_email", "send_sms", "voice_call", "wait", "condition", "split", "update_contact", "end")
+CRM_TRIGGERS = ("deal_created", "deal_stage_changed", "deal_won", "deal_lost", "deal_rotting", "score_reached",
+                "sla_breached", "owner_assigned", "ai_call_completed", "chat_lead_captured",
+                "chat_conversation_closed", "form_submitted")
+# Engagement triggers read the channel records: replies, clicks, answered calls and opt-outs.
+ENGAGEMENT_TRIGGERS = ("sms_replied", "email_clicked", "call_answered", "unsubscribed")
+TRIGGERS = ("contact_created", "added_to_list", "tag_added", "segment_entered", *ENGAGEMENT_TRIGGERS, *CRM_TRIGGERS)
+TRIGGER_NAMES = {
+    "contact_created": "Contact is created", "added_to_list": "Added to a list", "tag_added": "Tag is added",
+    "segment_entered": "Enters a segment", "sms_replied": "SMS reply received", "email_clicked": "Email link clicked",
+    "call_answered": "Call answered", "unsubscribed": "Unsubscribed or opted out", "deal_created": "Deal is created",
+    "deal_stage_changed": "Deal changes stage", "deal_won": "Deal is won", "deal_lost": "Deal is lost",
+    "deal_rotting": "Deal is going cold", "score_reached": "Lead becomes hot",
+    "sla_breached": "First-response SLA is missed", "owner_assigned": "Owner is assigned",
+    "ai_call_completed": "AI call completed",
+    "chat_lead_captured": "Chatbot captures a lead", "chat_conversation_closed": "Chat conversation ends",
+    "form_submitted": "Form is submitted",
+}
+# Display names for step types (run history, issues and dry runs).
+STEP_NAMES = {"trigger": "Trigger", "send_email": "Send email", "send_sms": "Send SMS", "voice_call": "Voice call",
+              "wait": "Wait", "condition": "Condition", "split": "A/B split", "update_contact": "Update contact",
+              "crm_action": "CRM action", "end": "End"}
+NODE_TYPES = ("trigger", "send_email", "send_sms", "voice_call", "wait", "condition", "split", "update_contact",
+              "crm_action", "end")
 SEND_TYPES = ("send_email", "send_sms", "voice_call")
 # Which outgoing handles each node type has. None = a single unnamed output.
 HANDLES = {"condition": ("yes", "no"), "split": ("a", "b"), "end": ()}
@@ -49,7 +70,8 @@ def data(node: dict) -> dict:
 
 
 def label(node: dict) -> str:
-    return (data(node).get("label") or node.get("type", "step").replace("_", " ").capitalize())[:80]
+    t = node.get("type", "step")
+    return (data(node).get("label") or STEP_NAMES.get(t) or t.replace("_", " ").capitalize())[:80]
 
 
 def structural_issues(g: Graph) -> list[Issue]:

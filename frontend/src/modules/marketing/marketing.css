@@ -1,0 +1,141 @@
+/* Marketing site only: loaded with the marketing chunk, never with the app. */
+
+.mk-ink {
+  background-color: #0b0b14;
+  color: #fff;
+  color-scheme: dark;
+}
+
+/* Fine grid lines that fade out from the top centre. */
+.mk-grid {
+  background-image: linear-gradient(to right, rgb(255 255 255 / 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.055) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 60% at 50% 0%, #000 25%, transparent 75%);
+  mask-image: radial-gradient(ellipse 75% 60% at 50% 0%, #000 25%, transparent 75%);
+}
+.mk-grid-soft {
+  background-image: linear-gradient(to right, hsl(var(--border) / 0.7) 1px, transparent 1px),
+    linear-gradient(to bottom, hsl(var(--border) / 0.7) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 70% at 50% 50%, #000 10%, transparent 70%);
+  mask-image: radial-gradient(ellipse 60% 70% at 50% 50%, #000 10%, transparent 70%);
+}
+
+/* Film grain: a tiny SVG turbulence tile. */
+.mk-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  opacity: 0.09;
+  mix-blend-mode: overlay;
+}
+
+/* Aurora: soft radial blobs drifting on the GPU (transform only, no filters). */
+.mk-blob {
+  position: absolute;
+  border-radius: 9999px;
+  will-change: transform;
+  animation: mk-drift 22s ease-in-out infinite alternate;
+}
+.mk-blob-2 { animation-duration: 28s; animation-delay: -6s; }
+.mk-blob-3 { animation-duration: 34s; animation-delay: -12s; }
+@keyframes mk-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(8%, -6%, 0) scale(1.12); }
+  100% { transform: translate3d(-6%, 6%, 0) scale(0.94); }
+}
+
+/* Animated gradient ring (Pro card, highlights). */
+@property --mk-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.mk-ring {
+  position: relative;
+  isolation: isolate;
+}
+.mk-ring::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--mk-angle), #4f46e5, #a855f7, #ec4899, #22d3ee, #4f46e5);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: mk-spin 6s linear infinite;
+}
+.mk-ring {
+  box-shadow: 0 30px 80px -30px rgb(99 102 241 / 0.5), 0 0 0 1px rgb(99 102 241 / 0.08);
+}
+@keyframes mk-spin {
+  to { --mk-angle: 360deg; }
+}
+
+/* Flowing dashes along workflow edges. */
+.mk-flow {
+  stroke-dasharray: 4 8;
+  animation: mk-dash 1.2s linear infinite;
+}
+@keyframes mk-dash {
+  to { stroke-dashoffset: -24; }
+}
+
+/* Hide scrollbars on horizontal chip rows while keeping them scrollable. */
+.mk-no-scrollbar { scrollbar-width: none; }
+.mk-no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Calculator sliders: a filled track up to the thumb (--mk-fill). */
+.mk-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+}
+.mk-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, hsl(var(--primary)) var(--mk-fill, 0%), hsl(var(--border)) var(--mk-fill, 0%));
+}
+.mk-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: hsl(var(--border));
+}
+.mk-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: hsl(var(--primary));
+}
+.mk-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid hsl(var(--primary));
+  box-shadow: 0 4px 12px -2px rgb(79 70 229 / 0.45);
+  transition: transform 0.15s;
+}
+.mk-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid hsl(var(--primary));
+}
+.mk-range:active::-webkit-slider-thumb { transform: scale(1.12); }
+.mk-range:focus-visible { outline: none; }
+.mk-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px hsl(var(--ring) / 0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mk-blob,
+  .mk-ring::before,
+  .mk-flow {
+    animation: none !important;
+  }
+}

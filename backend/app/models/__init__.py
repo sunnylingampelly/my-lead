@@ -17,19 +17,77 @@ from app.models.audience import (
 from app.models.audit import AuditLog
 from app.models.automation import Workflow, WorkflowRun, WorkflowStep
 from app.models.base import Base
-from app.models.billing import UsageSettlement, Wallet, WalletHold, WalletTransaction
+from app.models.billing import Subscription, UsageSettlement, Wallet, WalletHold, WalletTransaction
+from app.models.chat import (
+    ChatAgent,
+    ChatBot,
+    ChatCannedResponse,
+    ChatConversation,
+    ChatKnowledgeChunk,
+    ChatKnowledgeSource,
+    ChatMessage,
+    ChatVisitor,
+)
+from app.models.crm import (
+    AssignmentRule,
+    Company,
+    CrmActivity,
+    CrmEvent,
+    CrmNote,
+    CrmSettings,
+    CrmTask,
+    Deal,
+    DealContact,
+    DealStageHistory,
+    LostReason,
+    Pipeline,
+    PipelineStage,
+    ScoringRule,
+)
 from app.models.email import EmailCampaign, EmailEvent, EmailMessage, EmailSender, EmailTemplate, WebhookEvent
+from app.models.forms import LeadForm, LeadFormDailyStat, LeadFormSubmission, LeadFormVersion
 from app.models.notification import Notification
 from app.models.organization import Invitation, Organization, OrganizationMember, Permission, Role, RolePermission
 from app.models.payment import Payment
 from app.models.sms import SmsCampaign, SmsDltConfiguration, SmsEvent, SmsInbound, SmsMessage, SmsSender, SmsTemplate
 from app.models.support import SupportGrant
 from app.models.user import EmailVerification, PasswordReset, User, UserSession
-from app.models.voice import VoiceAudio, VoiceCall, VoiceCallerId, VoiceCampaign, VoiceEvent
+from app.models.voice import (
+    PhoneNumber,
+    VoiceAgent,
+    VoiceAudio,
+    VoiceCall,
+    VoiceCallerId,
+    VoiceCampaign,
+    VoiceEvent,
+)
 
 __all__ = [
+    "ChatAgent",
+    "ChatBot",
+    "ChatCannedResponse",
+    "ChatConversation",
+    "ChatKnowledgeChunk",
+    "ChatKnowledgeSource",
+    "ChatMessage",
+    "ChatVisitor",
+    "AssignmentRule",
+    "Company",
+    "CrmActivity",
+    "CrmEvent",
+    "CrmNote",
+    "CrmSettings",
+    "CrmTask",
+    "Deal",
+    "DealContact",
+    "DealStageHistory",
+    "LostReason",
+    "Pipeline",
+    "PipelineStage",
+    "ScoringRule",
     "SupportGrant",
     "Payment",
+    "Subscription",
     "UsageSettlement",
     "Wallet",
     "WalletHold",
@@ -37,6 +95,8 @@ __all__ = [
     "Workflow",
     "WorkflowRun",
     "WorkflowStep",
+    "PhoneNumber",
+    "VoiceAgent",
     "VoiceAudio",
     "VoiceCall",
     "VoiceCallerId",
@@ -55,6 +115,10 @@ __all__ = [
     "EmailSender",
     "EmailTemplate",
     "WebhookEvent",
+    "LeadForm",
+    "LeadFormDailyStat",
+    "LeadFormSubmission",
+    "LeadFormVersion",
     "Notification",
     "ConsentRecord",
     "Contact",

@@ -34,3 +34,21 @@ export function formatDuration(seconds: number | string | null | undefined) {
   const m = Math.floor(s / 60)
   return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`
 }
+
+export const INTEREST: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
+  hot: { label: 'Hot', variant: 'success' },
+  warm: { label: 'Warm', variant: 'warning' },
+  cold: { label: 'Cold', variant: 'secondary' },
+  not_interested: { label: 'Not interested', variant: 'destructive' },
+}
+export const SENTIMENT: Record<string, { label: string; variant: 'success' | 'secondary' | 'destructive' }> = {
+  positive: { label: 'Positive', variant: 'success' },
+  neutral: { label: 'Neutral', variant: 'secondary' },
+  negative: { label: 'Negative', variant: 'destructive' },
+}
+
+export function formatOutcome(v: unknown, type?: string) {
+  if (v === null || v === undefined || v === '') return '—'
+  if (type === 'yes_no' || typeof v === 'boolean') return v ? 'Yes' : 'No'
+  return String(v)
+}

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts'
@@ -18,9 +18,12 @@ import { Pagination } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount, formatPhone } from '@/lib/regions'
 import { cn, formatDateTime, timeAgo } from '@/lib/utils'
+import { RecipientActions } from '../email/recipientActions'
 import { CampaignStatusBadge, pct } from '../email/components'
 import { formatMoney } from '../sms/format'
 import { CALL_STATUS, CATEGORY_LABEL, formatDuration } from './format'
+import { CallDetailSheet } from './CallDetail'
+import { INTEREST } from './format'
 
 // Outcome colours: answered is the good state; the rest are neutral-to-warning, failures red.
 const OUTCOMES = [
@@ -60,11 +63,13 @@ const FILTERS = [
   ['skipped', 'Skipped'],
 ] as const
 
-function Calls({ campaignId, currency }: { campaignId: string; currency: string | null }) {
+function Calls({ campaignId, campaignName, currency }: { campaignId: string; campaignName: string; currency: string | null }) {
   const { app } = useWorkspace()
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [params, setParams] = useSearchParams()
+  const openCall = params.get('call')
   const q = useQuery({
     queryKey: ['voice', app!.id, 'calls', campaignId, status, search, page],
     queryFn: () => voiceApi(app!.id).calls(campaignId, { page, page_size: 25, status: status || undefined, search: search || undefined }),
@@ -74,11 +79,14 @@ function Calls({ campaignId, currency }: { campaignId: string; currency: string 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Calls</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Calls</CardTitle>
+          <RecipientActions channel="voice" campaignId={campaignId} campaignName={campaignName} status={status} tabLabel={FILTERS.find(([k]) => k === status)?.[1] ?? 'All'} count={q.data?.total ?? 0} />
+        </div>
         <CardDescription>Every person, their latest attempt and how it ended.</CardDescription>
       </CardHeader>
       <div className="flex flex-wrap items-center gap-2 border-y p-3">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex max-w-full gap-1 overflow-x-auto">
           {FILTERS.map(([k, label]) => (
             <button
               key={k}
@@ -86,7 +94,7 @@ function Calls({ campaignId, currency }: { campaignId: string; currency: string 
                 setStatus(k)
                 setPage(1)
               }}
-              className={cn('rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
+              className={cn('shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
             >
               {label}
             </button>
@@ -132,14 +140,23 @@ function Calls({ campaignId, currency }: { campaignId: string; currency: string 
                     <TD>
                       <span className="flex flex-wrap items-center gap-1">
                         <Badge variant={meta.variant}>{meta.label}</Badge>
-                        {c.opted_out && <Badge variant="destructive">Pressed 9</Badge>}
+                        {c.opted_out && <Badge variant="destructive">{c.agent_id ? 'Opted out' : 'Pressed 9'}</Badge>}
+                        {c.ai_interest && <Badge variant={INTEREST[c.ai_interest]?.variant ?? 'secondary'}>{INTEREST[c.ai_interest]?.label ?? c.ai_interest}</Badge>}
                       </span>
                     </TD>
                     <TD className="text-right tabular-nums">{c.attempts}</TD>
                     <TD className="text-right tabular-nums">{c.duration_seconds ? formatDuration(c.duration_seconds) : '—'}</TD>
                     <TD className="text-right tabular-nums">{c.cost && Number(c.cost) > 0 ? formatMoney(c.cost, currency) : '—'}</TD>
                     <TD className="max-w-xs truncate text-xs text-muted-foreground">
-                      {c.next_attempt_at && ['queued', 'deferred'].includes(c.status)
+                      {c.has_transcript || c.agent_id ? (
+                        <button
+                          className="max-w-full truncate font-medium text-primary hover:underline"
+                          data-testid="view-call"
+                          onClick={() => setParams((p) => { p.set('call', c.id); return p }, { replace: true })}
+                        >
+                          {c.ai_summary ? c.ai_summary : c.has_transcript ? 'View transcript' : 'View call'}
+                        </button>
+                      ) : c.next_attempt_at && ['queued', 'deferred'].includes(c.status)
                         ? `${c.deferred_reason === 'calling_window' ? 'Outside calling hours' : 'Retry'} · ${formatDateTime(c.next_attempt_at)}`
                         : c.error_message ?? (c.answered_by === 'machine' ? 'Answering machine' : c.answered_at ? `Answered ${formatDateTime(c.answered_at)}` : '')}
                     </TD>
@@ -152,6 +169,7 @@ function Calls({ campaignId, currency }: { campaignId: string; currency: string 
           <Pagination page={page} pageSize={25} total={q.data.total} onPage={setPage} />
         </>
       )}
+      <CallDetailSheet appId={app!.id} campaignId={campaignId} callId={openCall} onClose={() => setParams((p) => { p.delete('call'); return p }, { replace: true })} />
     </Card>
   )
 }
@@ -328,13 +346,13 @@ export function VoiceReportPage() {
               <Kpi label="Cost" value={formatMoney(st.cost, camp.currency)} sub={`${f(st.billable_minutes)} billable min · avg ${formatDuration(rep.data?.rates.average_seconds)}`} help="Started minutes of connected calls × the per-minute price. Simulated campaigns are not charged." />
             </div>
           )}
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle>Calls finished</CardTitle>
                 <CardDescription>Per {rep.data?.timeline.granularity ?? 'hour'}, in your local time.</CardDescription>
               </CardHeader>
-              <CardContent className="h-64">
+              <CardContent className="h-64 overflow-hidden">
                 {rep.data?.timeline.points.length ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={rep.data.timeline.points.map((p) => ({ ...p, label: new Date(p.at).toLocaleString(undefined, rep.data!.timeline.granularity === 'hour' ? { hour: 'numeric', day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short' }) }))}>
@@ -390,7 +408,7 @@ export function VoiceReportPage() {
               </CardContent>
             </Card>
           </div>
-          <Calls campaignId={camp.id} currency={camp.currency} />
+          <Calls campaignId={camp.id} campaignName={camp.name} currency={camp.currency} />
         </div>
       )}
 

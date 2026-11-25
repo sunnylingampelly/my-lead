@@ -35,9 +35,10 @@ from app.services.voice import events, rules, script
 from app.services.voice.campaigns import (
     IN_FLIGHT,
     PENDING,
-    audio_of,
-    caller_of,
+    caller_kinds,
+    campaign_country,
     cost_estimate,
+    draft_snapshot,
     estimate,
     readiness,
     stats_for,
@@ -76,12 +77,15 @@ def launch(campaign_id: str) -> str:
                        application_id=c.application_id)
                 db.commit()
                 return "failed"
-            caller, audio = caller_of(db, c), audio_of(db, c)
-            est = estimate(db, ctx, c.audience or {}, caller.country)
+            country = campaign_country(db, c)
+            est = estimate(db, ctx, c.audience or {}, country)
             from app.services.billing import wallet as wl
 
-            snap0 = script.snapshot_message(audio, caller, c)
-            cost0 = cost_estimate(est.eligible, script.estimated_seconds(snap0), caller.country)
+            # Frozen now: the caller and the message (for AI agents, the agent's version and behaviour).
+            snap0 = draft_snapshot(db, c)
+            ai_call = snap0.get("message_type") == "ai_agent"
+            agent_id = (snap0.get("agent") or {}).get("id") if ai_call else None
+            cost0 = cost_estimate(est.eligible, script.estimated_seconds(snap0), country, ai=ai_call)
             problem = wl.hold_or_fail(db, c, "voice", cost0["total"], cost0["currency"])
             if problem:
                 c.status, c.error = "failed", problem[:500]
@@ -89,25 +93,26 @@ def launch(campaign_id: str) -> str:
                 return "failed"
             existing = set(db.scalars(select(VoiceCall.contact_id).where(VoiceCall.campaign_id == c.id)))
             stmt = (base_query(ctx).where(audience_condition(db, ctx, c.audience or {}), eligibility_condition("voice"),
-                                          Contact.phone_country == caller.country)
+                                          Contact.phone_country == country)
                     .with_only_columns(Contact.id, Contact.phone).order_by(Contact.id))
             rows, created, now = [], 0, utcnow()
             for cid, phone in db.execute(stmt):
                 if cid in existing:
                     continue
                 rows.append({"id": new_uuid(), "organization_id": c.organization_id, "application_id": c.application_id,
-                             "campaign_id": c.id, "contact_id": cid, "to_phone": phone, "country": caller.country,
+                             "campaign_id": c.id, "contact_id": cid, "to_phone": phone, "country": country,
                              "status": "queued", "attempts": 0, "duration_seconds": 0, "billable_minutes": 0,
-                             "opted_out": False, "created_at": now, "updated_at": now})
+                             "opted_out": False, "agent_id": agent_id, "created_at": now, "updated_at": now})
                 if len(rows) >= 1000:
                     db.execute(VoiceCall.__table__.insert(), rows)
                     created, rows = created + len(rows), []
             if rows:
                 db.execute(VoiceCall.__table__.insert(), rows)
                 created += len(rows)
-            snap = script.snapshot_message(audio, caller, c)
-            _, pname = provider_for(caller.provider)
-            cost = cost_estimate(len(existing) + created, script.estimated_seconds(snap), caller.country)
+            snap = snap0
+            # Each call picks its Signalcraft number (and so its provider) at dial time.
+            pname = "auto" if settings.COMMUNICATION_MODE == "live" else "simulation"
+            cost = cost_estimate(len(existing) + created, script.estimated_seconds(snap), country, ai=ai_call)
             c.snapshot, c.provider, c.currency = snap, pname, cost["currency"]
             c.recipient_count, c.excluded = len(existing) + created, est.excluded
             c.estimated_cost = Decimal(str(cost["total"]))
@@ -139,7 +144,7 @@ def run(campaign_id: str, max_wait_seconds: float = 0) -> str:
                            error_message="The provider never reported how the call ended"))
         db.commit()
         snap = c.snapshot or {}
-        provider, pname = provider_for(snap.get("provider"))
+        pname = "auto" if settings.COMMUNICATION_MODE == "live" else "simulation"
         app = db.get(Application, c.application_id)
         s = db.scalar(select(ApplicationSettings).where(ApplicationSettings.application_id == c.application_id))
         quiet = (s.quiet_hours_start, s.quiet_hours_end) if s else ("21:00", "09:00")
@@ -168,8 +173,13 @@ def run(campaign_id: str, max_wait_seconds: float = 0) -> str:
             db.commit()
             batch = list(db.scalars(select(VoiceCall).where(VoiceCall.id.in_(ids), VoiceCall.status == "placing")))
             started = time.monotonic()
-            _place_batch(db, c, app, quiet, batch, provider, pname)
+            _place_batch(db, c, app, quiet, batch)
             db.commit()
+            if snap.get("message_type") == "ai_agent" and pname == "simulation":
+                from app.services.voice import ai_results
+
+                for call in batch:
+                    ai_results.process(call.id)
             if rate and batch:
                 wait = len(batch) / rate - (time.monotonic() - started)
                 if wait > 0:
@@ -192,13 +202,17 @@ def _ineligible(contact: Contact | None, call: VoiceCall, suppressed: set[str]) 
     if contact.status == "blocked":
         return "Contact is blocked"
     if contact.phone_country != call.country:
-        return "Number is not in the caller ID's country"
+        return "Number is not in this campaign's country"
     return None
 
 
-def _place_batch(db: Session, c: VoiceCampaign, app: Application, quiet: tuple[str, str], batch: list[VoiceCall],
-                 provider: VoiceProvider, pname: str) -> None:
+def _place_batch(db: Session, c: VoiceCampaign, app: Application, quiet: tuple[str, str],
+                 batch: list[VoiceCall]) -> None:
+    from app.services.voice.numbers import pick_caller
+
     snap = c.snapshot or {}
+    ai_call = snap.get("message_type") == "ai_agent"
+    providers: dict[str, tuple[VoiceProvider, str]] = {}
     contacts = {x.id: x for x in db.scalars(select(Contact).where(
         Contact.id.in_([m.contact_id for m in batch if m.contact_id])))}
     suppressed = set(db.scalars(select(SuppressionEntry.value_hash).where(
@@ -214,14 +228,25 @@ def _place_batch(db: Session, c: VoiceCampaign, app: Application, quiet: tuple[s
         if resume_at is not None:
             call.status, call.next_attempt_at, call.deferred_reason = "deferred", resume_at, "calling_window"
             continue
+        # Signalcraft picks the caller number: stable per contact, of the kind this call category needs.
+        pn = pick_caller(db, country=call.country, kind=caller_kinds(call.country, c.category),
+                         contact_id=call.contact_id, twilio_only=ai_call)
+        if pn is None:
+            call.status, call.error_code, call.ended_at = "failed", "no_caller_number", utcnow()
+            call.error_message = "Calling to this country isn't available yet"
+            continue
+        if pn.provider not in providers:
+            providers[pn.provider] = provider_for(pn.provider)
+        provider, pname = providers[pn.provider]
         call.attempts += 1
         call.provider = pname
+        call.from_number = pn.number
         call.deferred_reason = None
         call.answered_at = call.answered_by = call.ended_at = None
         sc = script.build(snap, contact, call.id)
         try:
             res = provider.place(OutboundCall(
-                to=call.to_phone, caller_id=snap.get("caller_number", ""), script=sc,
+                to=call.to_phone, caller_id=pn.number, script=sc,
                 status_callback=script.status_callback(pname, call.id, call.attempts),
                 script_url=render.public_url(f"/public/voice/script/{tokens.make('vs', call.id)}"),
                 idempotency_key=f"{call.id}:{call.attempts}"))
@@ -247,7 +272,48 @@ def _place_batch(db: Session, c: VoiceCampaign, app: Application, quiet: tuple[s
         call.next_attempt_at = None
         events.apply(db, call, "placed", provider=pname, provider_event_id=f"{call.id}:{call.attempts}:placed")
         if pname == "simulation":
-            _simulate(db, call, snap)
+            if snap.get("message_type") == "ai_agent":
+                _simulate_ai(db, call, snap, contact)
+            else:
+                _simulate(db, call, snap)
+
+
+def simulated_caller_lines(outcome: str, first_name: str | None) -> list[str]:
+    """What the simulated person says, turn by turn."""
+    if outcome == "opt_out":
+        return ["Hello?", "Please stop calling me. I'm not interested."]
+    return [f"Hi, yes, this is {first_name or 'me'}.", "Sure, that sounds interesting. Tell me more.",
+            "Yes, I'm interested. Can you call me back tomorrow?", "Okay, thanks. Bye."]
+
+
+def _simulate_ai(db: Session, call: VoiceCall, snap: dict, contact: Contact | None) -> None:
+    """An AI-agent conversation with a scripted simulated person (offline responder, or Claude when configured)."""
+    from app.services.voice import ai
+
+    outcome = simulated_outcome(call.to_phone)
+    key = f"sim:{call.provider_call_id}"
+    events.apply(db, call, "ringing", provider="simulation", provider_event_id=f"{key}:ringing")
+    if outcome in ("no_answer", "busy"):
+        events.apply(db, call, outcome, provider="simulation", provider_event_id=f"{key}:{outcome}")
+        return
+    machine = outcome == "voicemail"
+    events.apply(db, call, "answered", provider="simulation", provider_event_id=f"{key}:answered",
+                 answered_by="machine" if machine else "human")
+    agent = snap.get("agent") or {}
+    values = ai.values_for(None, snap.get("business_name") or "us", contact)
+    transcript = [{"role": "assistant", "text": ai.greeting_for(agent, values), "at": utcnow().isoformat()}]
+    if not machine:
+        for line in simulated_caller_lines(outcome, contact.first_name if contact else None):
+            transcript.append({"role": "user", "text": line, "at": utcnow().isoformat()})
+            r = ai.reply_sync(agent, [{"role": t["role"], "content": t["text"]} for t in transcript], values)
+            transcript.append({"role": "assistant", "text": r["text"], "at": utcnow().isoformat(),
+                               **({"simulated": True} if r.get("simulated") else {})})
+            if r["end"] or r["transfer"]:
+                break
+    call.transcript = transcript
+    seconds = int(sum(rules.spoken_seconds(t["text"]) for t in transcript) + 3 * len(transcript))
+    events.apply(db, call, "completed", provider="simulation", provider_event_id=f"{key}:completed",
+                 duration=max(seconds, 1), answered_by="machine" if machine else "human")
 
 
 def _simulate(db: Session, call: VoiceCall, snap: dict) -> None:

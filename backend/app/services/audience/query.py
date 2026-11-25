@@ -16,6 +16,8 @@ SORTABLE = {
     "company": Contact.company,
     "city": Contact.city,
     "last_activity_at": Contact.last_activity_at,
+    "lead_score": Contact.lead_score,
+    "lifecycle_stage": Contact.lifecycle_stage,
 }
 
 
@@ -103,6 +105,15 @@ def apply_filters(db: Session, ctx: AppContext, stmt: Select, f: ContactFilters 
         stmt = stmt.where(compile_rules(db, ctx, seg.rules))
     if f.eligible_for:
         stmt = stmt.where(eligibility_condition(f.eligible_for))
+    if f.owner_id == "unassigned":
+        stmt = stmt.where(Contact.owner_id.is_(None))
+    elif f.owner_id:
+        user = getattr(ctx, "user", None)
+        stmt = stmt.where(Contact.owner_id == (user.id if f.owner_id == "me" and user else f.owner_id))
+    if f.lifecycle_stage:
+        stmt = stmt.where(Contact.lifecycle_stage == f.lifecycle_stage)
+    if f.min_lead_score is not None:
+        stmt = stmt.where(Contact.lead_score >= f.min_lead_score)
     return stmt
 
 

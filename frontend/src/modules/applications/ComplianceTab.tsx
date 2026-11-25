@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { CheckCircle2, Circle, Clock, Scale } from 'lucide-react'
@@ -12,7 +13,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, Input, Textarea } from '@/components/ui/form-controls'
 import { Badge } from '@/components/ui/misc'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { countryFlag } from '@/lib/regions'
+import { cn } from '@/lib/utils'
+import { CountryFlag } from '@/components/CountryFlag'
+
+/** Setup checks computed by the backend from real records, with the page that completes each one. */
+type SetupCheck = { key: string; label: string; done: boolean; href?: string; detail?: string | null; steps?: { label: string; done: boolean; href: string }[] }
 
 /** Regional rules for the application's market (India or the US) and the setup they require. */
 export function ComplianceTab() {
@@ -43,13 +48,18 @@ export function ComplianceTab() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Scale className="size-4 text-primary" /> {countryFlag(c.region)} {c.region === 'XX' ? 'No regional profile' : `${c.region_name} rules`}
+              <Scale className="size-4 text-primary" /> <CountryFlag code={c.region === 'XX' ? null : c.region} /> {c.region === 'XX' ? 'No regional profile' : `${c.region_name} rules`}
             </CardTitle>
             <CardDescription>
-              Based on this application's default country. {c.region === 'XX' && 'Set India or the United States as the default country to apply a market profile.'}
+              Based on this application's default country. {c.region === 'XX' && 'Set India, the UAE or the United States as the default country to apply a market profile.'}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {c.notices?.map((n) => (
+              <p key={n.key} className="rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-sm text-warning-strong" data-testid={`notice-${n.key}`}>
+                {n.text}
+              </p>
+            ))}
             {c.regulations.map((r) => (
               <div key={r.name}>
                 <div className="text-sm font-semibold">{r.name}</div>
@@ -58,7 +68,10 @@ export function ComplianceTab() {
             ))}
             <div className="flex flex-wrap gap-2 pt-1">
               <Badge variant="secondary">
-                <Clock className="size-3" /> Promotional window {c.marketing_window[0]}–{c.marketing_window[1]} recipient time
+                <Clock className="size-3" />{' '}
+                {c.region === 'AE'
+                  ? `Calls ${c.marketing_window[0]}–${c.marketing_window[1]} UAE time, Monday to Friday; promotional SMS 07:00–21:00`
+                  : `Promotional window ${c.marketing_window[0]}–${c.marketing_window[1]} recipient time`}
               </Badge>
               <Badge variant="secondary">Currency {c.currency}</Badge>
               {c.sms_voice_requires_written_consent && <Badge variant="warning">Written consent for SMS and calls</Badge>}
@@ -99,7 +112,7 @@ export function ComplianceTab() {
                 <Field
                   label="Postal address"
                   htmlFor="biz-address"
-                  hint={c.region === 'IN' ? 'Registered office address, including PIN code.' : 'Street address or registered P.O. box, city, state and ZIP.'}
+                  hint={c.region === 'IN' ? 'Registered office address, including PIN code.' : c.region === 'AE' ? 'Registered office address, P.O. box and emirate.' : 'Street address or registered P.O. box, city, state and ZIP.'}
                 >
                   <Textarea id="biz-address" rows={3} value={address} onChange={(e) => setAddress(e.target.value)} />
                 </Field>
@@ -123,16 +136,37 @@ export function ComplianceTab() {
         </CardHeader>
         <CardContent>
           <ul className="space-y-3">
-            {c.checks.map((k) => (
+            {(c.checks as SetupCheck[]).map((k) => (
               <li key={k.key} className="flex items-start gap-2 text-sm" data-testid={`check-${k.key}`}>
                 {k.done ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success-strong" /> : <Circle className="mt-0.5 size-4 shrink-0 text-muted-foreground/50" />}
-                <span className={k.done ? 'text-muted-foreground' : ''}>
+                <span className={cn('min-w-0', k.done && 'text-muted-foreground')}>
                   {k.label}
-                  {k.pending_module && <span className="block text-xs text-muted-foreground">Configured when the SMS module is enabled.</span>}
+                  {k.steps && k.steps.length > 1 && (
+                    <span className="mt-1 block space-y-0.5">
+                      {k.steps.map((s) => (
+                        <Link key={s.label} to={s.href} className={cn('flex items-center gap-1.5 text-xs hover:underline', s.done ? 'text-muted-foreground' : 'text-primary')}>
+                          {s.done ? <CheckCircle2 className="size-3 text-success-strong" /> : <Circle className="size-3" />} {s.label.charAt(0).toUpperCase() + s.label.slice(1)}
+                        </Link>
+                      ))}
+                    </span>
+                  )}
+                  {!k.done && k.href && !(k.steps && k.steps.length > 1) && (
+                    <Link to={k.href} className="block text-xs font-medium text-primary hover:underline">
+                      {k.detail ?? 'Set up'} →
+                    </Link>
+                  )}
                 </span>
               </li>
             ))}
           </ul>
+          <div className="mt-4 space-y-1 border-t pt-3 text-xs">
+            <Link to={`/apps/${appId}/sms/registration`} className="block font-medium text-primary hover:underline">
+              SMS registration (DLT / 10DLC) →
+            </Link>
+            <Link to={`/apps/${appId}/voice/registration`} className="block font-medium text-primary hover:underline">
+              Voice DLT registration (India) →
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -1,10 +1,11 @@
 """Automation endpoints, scoped to /apps/{app_id}/automation."""
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import DB, AppCtx
+from app.core.errors import ValidationFailed
 from app.core.permissions import Perm
 from app.schemas.common import PageParams
 from app.services.automation import workflows
@@ -28,6 +29,17 @@ class WorkflowUpdate(BaseModel):
 
 class PublishBody(BaseModel):
     activate: bool = True
+
+
+class EnrollBody(BaseModel):
+    contact_ids: list[str] | None = Field(default=None, max_length=10000)
+    list_id: str | None = Field(default=None, max_length=36)
+    segment_id: str | None = Field(default=None, max_length=36)
+
+
+class TestBody(BaseModel):
+    contact_id: str = Field(min_length=1, max_length=36)
+    graph: Literal["draft", "published"] = "draft"
 
 
 @router.get("/workflows")
@@ -61,8 +73,9 @@ def validate(workflow_id: str, ctx: AppCtx, db: DB):
     """Check the draft graph. Read-only: hidden campaigns are only created when publishing."""
     ctx.require(Perm.AUTOMATION_READ)
     issues = workflows.validate(db, ctx, workflows._get(db, ctx, workflow_id))
+    warnings = workflows.warnings(db, ctx, workflows._get(db, ctx, workflow_id))
     db.rollback()
-    return {"valid": not issues, "issues": workflows.issues_out(issues)}
+    return {"valid": not issues, "issues": workflows.issues_out(issues), "warnings": workflows.issues_out(warnings)}
 
 
 @router.post("/workflows/{workflow_id}/publish")
@@ -113,8 +126,9 @@ def stats(workflow_id: str, ctx: AppCtx, db: DB):
 
 @router.get("/workflows/{workflow_id}/runs")
 def runs(workflow_id: str, ctx: AppCtx, db: DB, paging: Paging,
-         status_: str | None = Query(None, alias="status", max_length=20)):
-    return workflows.list_runs(db, ctx, workflow_id, paging, status_)
+         status_: str | None = Query(None, alias="status", max_length=20),
+         search: str | None = Query(None, max_length=100)):
+    return workflows.list_runs(db, ctx, workflow_id, paging, status_, search)
 
 
 @router.get("/workflows/{workflow_id}/runs/{run_id}")
@@ -126,3 +140,28 @@ def run_steps(workflow_id: str, run_id: str, ctx: AppCtx, db: DB):
 def stop_run(workflow_id: str, run_id: str, ctx: AppCtx, db: DB):
     workflows.stop_run(db, ctx, workflow_id, run_id)
     db.commit()
+
+
+@router.post("/workflows/{workflow_id}/enroll")
+def enroll(workflow_id: str, body: EnrollBody, ctx: AppCtx, db: DB):
+    """Start an active workflow now for chosen contacts, a list or a segment. People already on the journey
+    are skipped; people who finished it before are enrolled again only when re-entry is allowed."""
+    if sum(x is not None for x in (body.contact_ids, body.list_id, body.segment_id)) != 1:
+        raise ValidationFailed("Send one of contact_ids, list_id or segment_id", code="INVALID_AUDIENCE")
+    out = workflows.enroll_contacts(db, ctx, workflow_id, body.contact_ids, body.list_id, body.segment_id)
+    db.commit()
+    return out
+
+
+@router.post("/workflows/{workflow_id}/test")
+def test_workflow(workflow_id: str, body: TestBody, ctx: AppCtx, db: DB):
+    """Dry run for one contact: walks the draft (or published) graph without sending or enrolling."""
+    out = workflows.test_run(db, ctx, workflow_id, body.contact_id, body.graph)
+    db.rollback()
+    return out
+
+
+@router.get("/runs")
+def contact_runs(ctx: AppCtx, db: DB, contact_id: str = Query(..., min_length=1, max_length=36)):
+    """A contact's workflow history, newest first."""
+    return workflows.contact_runs(db, ctx, contact_id)

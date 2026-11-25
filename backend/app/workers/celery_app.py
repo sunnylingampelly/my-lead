@@ -12,7 +12,8 @@ celery_app = Celery(
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
     include=["app.tasks.system_email", "app.tasks.maintenance", "app.tasks.imports", "app.tasks.email", "app.tasks.sms",
-             "app.tasks.voice", "app.tasks.automation", "app.tasks.billing", "app.tasks.payments"],
+             "app.tasks.voice", "app.tasks.automation", "app.tasks.billing", "app.tasks.payments", "app.tasks.crm",
+             "app.tasks.chat"],
 )
 
 celery_app.conf.update(
@@ -38,6 +39,8 @@ celery_app.conf.update(
         "app.tasks.sms.*": {"queue": "campaigns"},
         "app.tasks.voice.*": {"queue": "campaigns"},
         "app.tasks.automation.*": {"queue": "campaigns"},
+        "app.tasks.crm.*": {"queue": "default"},
+        "app.tasks.chat.*": {"queue": "default"},
         "app.tasks.billing.*": {"queue": "default"},
         "app.tasks.payments.*": {"queue": "webhooks"},
     },
@@ -50,9 +53,25 @@ celery_app.conf.update(
             "task": "app.tasks.sms.dispatch_due_sms_campaigns",
             "schedule": 60.0,
         },
+        "poll-sns-sms-receipts": {
+            "task": "app.tasks.sms.poll_sns_receipts",
+            "schedule": 60.0,
+        },
         "dispatch-due-voice-campaigns": {
             "task": "app.tasks.voice.dispatch_due_voice_campaigns",
             "schedule": 30.0,
+        },
+        "sweep-ai-calls": {
+            "task": "app.tasks.voice.sweep_ai_calls",
+            "schedule": 300.0,
+        },
+        "crm-tick": {
+            "task": "app.tasks.crm.crm_tick",
+            "schedule": 60.0,
+        },
+        "chat-tick": {
+            "task": "app.tasks.chat.chat_tick",
+            "schedule": 60.0,
         },
         "automation-tick": {
             "task": "app.tasks.automation.automation_tick",
@@ -61,6 +80,10 @@ celery_app.conf.update(
         "settle-usage": {
             "task": "app.tasks.billing.settle_usage",
             "schedule": 60.0,
+        },
+        "renew-subscriptions": {
+            "task": "app.tasks.billing.renew_subscriptions",
+            "schedule": crontab(minute="*/10"),
         },
         "resume-stalled-imports": {
             "task": "app.tasks.imports.resume_stalled_imports",

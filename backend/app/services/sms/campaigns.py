@@ -18,8 +18,9 @@ from app.schemas.email import Estimate, ReadinessCheck, ScheduleRequest
 from app.schemas.sms import CampaignCreate, CampaignListItem, CampaignOut, CampaignUpdate, MessageOut, Stats, TestSend
 from app.services import audit_service
 from app.services.audience.query import base_query, count, eligibility_condition
+from app.services.email import readiness as rd
 from app.services.email import render
-from app.services.email.campaigns import audience_condition, custom_keys
+from app.services.email.campaigns import audience_condition, capped_ids, custom_keys, initial_audience
 from app.services.sms import rules
 from app.services.sms.encoding import analyse
 from app.services.sms.registration import dlt_row, template_row
@@ -120,81 +121,133 @@ def cost_estimate(recipients: int, segments: int, country: str | None, category:
 # ------------------------------------------------------------------ readiness
 
 
-def _check(key: str, label: str, ok: bool, detail: str | None = None) -> ReadinessCheck:
-    return ReadinessCheck(key=key, label=label, ok=ok, detail=None if ok else detail)
+def _check(key: str, label: str, ok: bool, detail: str | None = None, **kw) -> ReadinessCheck:
+    return rd.check(key, label, ok, detail, **kw)
+
+
+def country_of(db: Session, ctx, c: SmsCampaign) -> tuple[SmsSender | None, str | None]:
+    """The chosen sender and the country it texts; before a sender is chosen, the app's home market."""
+    sender = sender_of(db, c)
+    return sender, rd.effective_country(ctx, sender.country if sender else None)
+
+
+def eligible_query(db: Session, ctx, audience: dict, country: str | None):
+    q = base_query(ctx).where(audience_condition(db, ctx, audience), eligibility_condition("sms"))
+    return q.where(Contact.phone_country == country) if country else q
+
+
+def quiet_wait(db: Session, ctx, c: SmsCampaign, country: str | None) -> dict:
+    """Promotional texts are held during quiet hours: the window, and who would wait if sent now."""
+    quiet = rd.quiet_hours(db, c.application_id)
+    window = rd.effective_window(None, quiet)
+    out = {"applies": c.category == "promotional", "window": window, "waiting": 0, "next_window_at": None,
+           "timezone": None}
+    if c.category != "promotional":
+        return out
+    try:
+        q = eligible_query(db, ctx, c.audience or {}, country)
+    except ValidationFailed:
+        return out
+    app_tz = ctx.application.timezone if ctx.application else None
+    w = rd.waiting_estimate(db, q, app_tz, lambda now, tz: rules.quiet_until(now, tz, *quiet))
+    return {**out, **(w or {})}
 
 
 def readiness(db: Session, ctx, c: SmsCampaign) -> tuple[list[ReadinessCheck], Estimate | None]:
     checks: list[ReadinessCheck] = []
-    sender = sender_of(db, c)
+    sender, country = country_of(db, ctx, c)
+    senders_url, reg_url = rd.app_url(ctx, "/sms/senders"), rd.app_url(ctx, "/sms/registration")
+    templates_url = rd.app_url(ctx, "/sms/templates")
+    pending = sender is None  # the app's market requirements, shown before a sender is chosen
     if sender is None:
-        checks.append(_check("sender", "Approved sender ID", False, "Choose a sender ID"))
+        checks.append(_check("sender", "Approved sender ID", False,
+                             "Choose a sender ID" + (f" for {COUNTRY_NAME[country]}" if country else ""),
+                             step="setup", action_url=senders_url, action_label="Add sender ID"))
     else:
         checks.append(_check("sender", "Approved sender ID", sender.status == "active",
-                             f"Confirm that {sender.sender_id} is registered before sending (Sender IDs page)"))
-    country = sender.country if sender else None
+                             f"Confirm that {sender.sender_id} is registered with your operator before sending",
+                             step="setup", action_url=senders_url, action_label="Confirm sender ID",
+                             meta={"sender_id": sender.id, "status": sender.status}))
     reg = dlt_row(db, c.application_id)
 
-    if sender and country == "IN":
+    if country == "IN":
         pe_ok = bool(reg and reg.principal_entity_id and reg.attested_at)
         checks.append(_check("registration", "DLT entity registration", pe_ok,
-                             "Add and confirm your DLT Principal Entity ID (SMS → DLT & 10DLC)"))
-        kind_ok = (sender.kind == "promotional") == (c.category == "promotional")
-        checks.append(_check("category", "Header matches message category", kind_ok,
-                             "Promotional messages use a numeric header; service and transactional messages use "
-                             "an alphabetic header"))
+                             "Indian operators only deliver texts from businesses registered on a DLT portal. "
+                             "Add and confirm your Principal Entity (PE) ID.",
+                             action_url=reg_url, action_label="DLT registration"))
+        want = "numeric (promotional)" if c.category == "promotional" else "alphabetic (service/transactional)"
+        if sender is None:
+            checks.append(_check("category", "Header matches message category", False,
+                                 f"This {c.category} text needs a {want} DLT header", step="setup",
+                                 action_url=senders_url, action_label="Add sender ID", pending=True))
+        else:
+            kind_ok = (sender.kind == "promotional") == (c.category == "promotional")
+            checks.append(_check("category", "Header matches message category", kind_ok,
+                                 "Promotional messages use a numeric header; service and transactional messages "
+                                 "use an alphabetic header", step="setup"))
         t = db.get(SmsTemplate, c.template_id) if c.template_id else None
         if t is None or t.application_id != c.application_id or not t.dlt_template_id:
             checks.append(_check("dlt_template", "Approved DLT content template", False,
-                                 "Indian SMS must use a template registered on DLT. Pick a template with a DLT "
-                                 "template ID."))
+                                 "Indian SMS must use a content template registered on DLT. Pick (or add) a "
+                                 "template with its DLT template ID.", step="setup", action_url=templates_url,
+                                 action_label="SMS templates", pending=pending))
         else:
             ok = bool(t.dlt_template_text) and rules.matches_dlt(c.body or "", t.dlt_template_text)
             checks.append(_check("dlt_template", "Approved DLT content template", ok,
                                  "The message must match the registered DLT text exactly, with fields only where "
-                                 "{#var#} appears"))
-    elif sender and country == "US":
-        if sender.kind == "long_code":
+                                 "{#var#} appears", step="message"))
+    elif country == "US":
+        if sender is None or sender.kind == "long_code":
             ok = bool(reg and reg.us_brand_id and reg.us_campaign_id and reg.attested_at)
             checks.append(_check("registration", "A2P 10DLC registration", ok,
                                  "US carriers block unregistered 10DLC traffic. Add and confirm your brand and "
-                                 "campaign IDs (SMS → DLT & 10DLC)"))
+                                 "campaign IDs.", action_url=reg_url, action_label="10DLC registration",
+                                 pending=pending))
         if c.category == "promotional":
             text = rules.final_body(c.body or "", country="US", category=c.category, append_opt_out=c.append_opt_out)
             ok = "stop" in text.lower()
-            checks.append(_check("opt_out", "Opt-out instructions", ok,
-                                 "US marketing texts must tell people how to opt out. Turn on “Reply STOP to opt "
-                                 "out” or add it to the message."))
+            checks.append(_check("opt_out", "Opt-out instructions (STOP)", ok,
+                                 "US marketing texts must tell people how to opt out. Turn on “Reply STOP to "
+                                 "opt out” or add it to the message.", step="message"))
 
     body_ok = bool((c.body or "").strip())
-    checks.append(_check("content", "Message text", body_ok, "Write the message"))
+    checks.append(_check("content", "Message text", body_ok, "Write the message", step="message"))
     if body_ok:
         issues = render.check([c.body], custom_keys(db, c.application_id))
         bad = issues.unknown + [v for v in render.variables_in(c.body) if v in render.SYSTEM_VARIABLES]
         detail = ("Unknown fields: " + ", ".join(bad)) if bad else (
             "Unsupported template syntax: " + ", ".join(issues.malformed[:3]))
-        checks.append(_check("personalisation", "Personalisation fields", not bad and not issues.malformed, detail))
+        checks.append(_check("personalisation", "Personalisation fields", not bad and not issues.malformed, detail,
+                             step="message"))
 
     if settings.COMMUNICATION_MODE == "live" and sender:
         missing = live_credentials_missing(sender.provider)
-        checks.append(_check("provider", "SMS provider connected", missing is None, missing))
+        checks.append(_check("provider", "SMS provider connected", missing is None, missing,
+                             action_url=rd.app_url(ctx, "/settings?tab=delivery"), action_label="Settings"))
+
+    if country:
+        consented = count(db, base_query(ctx).where(eligibility_condition("sms"), Contact.phone_country == country))
+        checks.append(_check(
+            "consent", "Contacts with SMS consent" + (" (TCPA)" if country == "US" else ""), consented > 0,
+            f"No contact with a mobile number in {COUNTRY_NAME[country]} has given SMS consent yet. Import "
+            "contacts with their consent, or record consent on each contact.",
+            action_url=rd.app_url(ctx, "/audience/import"), action_label="Import contacts"))
 
     est = None
     try:
         est = estimate(db, ctx, c.audience or {}, country)
         ok = est.eligible > 0
-        detail = "Choose an audience" if not est.matched else (
+        detail = "Choose who should receive this text" if not est.matched else (
             f"No one in this audience has an SMS-consented mobile number in {COUNTRY_NAME.get(country, country)}"
             if country else "No one in this audience can receive marketing SMS")
-        checks.append(_check("audience", "Audience with reachable contacts", ok, detail))
+        checks.append(_check("audience", "Audience with reachable contacts", ok, detail, step="audience"))
     except ValidationFailed as exc:
-        checks.append(_check("audience", "Audience with reachable contacts", False, exc.message))
-    if est and est.eligible > 0 and sender:
-        from app.services.billing import wallet as wl
-
+        checks.append(_check("audience", "Audience with reachable contacts", False, exc.message, step="audience"))
+    if est and est.eligible > 0:
         shape = message_shape(c.body, country=country, category=c.category, append_opt_out=c.append_opt_out)
         cost = cost_estimate(est.eligible, shape["segments"], country, c.category)
-        checks.append(wl.wallet_check(db, c.organization_id, cost["total"], cost["currency"]))
+        checks.append(rd.wallet_check(db, ctx, cost["total"], cost["currency"]))
     return checks, est
 
 
@@ -239,10 +292,12 @@ def create_campaign(db: Session, ctx: AppContext, data: CampaignCreate) -> SmsCa
     ctx.require(Perm.CAMPAIGNS_WRITE)
     c = SmsCampaign(organization_id=ctx.organization_id, application_id=ctx.application_id, name=data.name.strip(),
                     description=data.description, category=data.category, created_by_id=ctx.user.id,
-                    audience={"all": False, "list_ids": [], "segment_ids": []}, append_opt_out=True,
+                    audience=initial_audience(db, ctx, data.audience), append_opt_out=True,
                     sender_snapshot={}, excluded={})
-    default = db.scalar(select(SmsSender).where(SmsSender.application_id == ctx.application_id,
-                                                SmsSender.is_default.is_(True)))
+    # Prefer an approved sender: the default if active, otherwise any active one, else the default.
+    default = db.scalar(select(SmsSender).where(SmsSender.application_id == ctx.application_id)
+                        .order_by((SmsSender.status == "active").desc(), SmsSender.is_default.desc(),
+                                  SmsSender.created_at).limit(1))
     if default:
         c.sender_ref = default.id
     if data.template_id:
@@ -373,7 +428,7 @@ def send_test(db: Session, ctx: AppContext, campaign_id: str, data: TestSend) ->
             to=parsed.e164, sender_id=sender.sender_id, body=text, category=c.category,
             unicode=info.encoding == "UCS-2", dlt_template_id=t.dlt_template_id if t else None,
             dlt_entity_id=reg.principal_entity_id if reg else None,
-            messaging_service_sid=reg.us_messaging_service_sid if reg else None))
+            country=sender.country))
         results.append({"phone": parsed.e164, "accepted": res.accepted, "error": res.error_message})
     audit_service.record(db, "sms_campaign.test_sent", actor_user_id=ctx.user.id, organization_id=ctx.organization_id,
                          application_id=ctx.application_id, target_type="sms_campaign", target_id=c.id,
@@ -526,13 +581,32 @@ def report(db: Session, ctx: AppContext, campaign_id: str) -> dict:
     }
 
 
+def _filter_messages(q, status: str | None, campaign_id: str):
+    if status == "replied":
+        return q.where(SmsMessage.contact_id.in_(select(SmsInbound.contact_id).where(
+            SmsInbound.campaign_id == campaign_id, SmsInbound.contact_id.is_not(None))))
+    if status == "opted_out":
+        return q.where(SmsMessage.contact_id.in_(select(SmsInbound.contact_id).where(
+            SmsInbound.campaign_id == campaign_id, SmsInbound.keyword == "stop", SmsInbound.contact_id.is_not(None))))
+    if status == "not_delivered":
+        return q.where(SmsMessage.status.in_(("failed", "undelivered")))
+    if status:
+        return q.where(SmsMessage.status == status)
+    return q
+
+
+def recipient_ids(db: Session, ctx: AppContext, campaign_id: str, status: str | None) -> dict:
+    ctx.require(Perm.CAMPAIGNS_READ)
+    c = _get(db, ctx, campaign_id)
+    return capped_ids(db, _filter_messages(select(SmsMessage.contact_id).where(
+        SmsMessage.campaign_id == c.id, SmsMessage.contact_id.is_not(None)), status, c.id))
+
+
 def list_messages(db: Session, ctx: AppContext, campaign_id: str, params: PageParams, status: str | None,
                   search: str | None) -> Page[MessageOut]:
     ctx.require(Perm.CAMPAIGNS_READ)
     c = _get(db, ctx, campaign_id)
-    q = select(SmsMessage).where(SmsMessage.campaign_id == c.id)
-    if status:
-        q = q.where(SmsMessage.status == status)
+    q = _filter_messages(select(SmsMessage).where(SmsMessage.campaign_id == c.id), status, c.id)
     if search:
         digits = "".join(ch for ch in search if ch.isdigit())
         if digits:
@@ -582,4 +656,16 @@ def overview(db: Session, ctx: AppContext) -> dict:
         "senders": dict(senders),
         "registration": {"india": bool(reg and reg.principal_entity_id and reg.attested_at),
                          "us": bool(reg and reg.us_brand_id and reg.us_campaign_id and reg.attested_at)},
+        "setup": setup_facts(db, ctx),
     }
+
+
+def setup_facts(db: Session, ctx) -> dict:
+    """What the overview's setup checklist needs, per market."""
+    consented = dict(db.execute(
+        base_query(ctx).where(eligibility_condition("sms"), Contact.phone_country.in_(("IN", "US")))
+        .with_only_columns(Contact.phone_country, func.count()).group_by(Contact.phone_country).order_by(None)).all())
+    dlt_templates = db.scalar(select(func.count()).select_from(SmsTemplate).where(
+        SmsTemplate.application_id == ctx.application_id, SmsTemplate.dlt_template_id.is_not(None))) or 0
+    return {"consented": {"IN": consented.get("IN", 0), "US": consented.get("US", 0)},
+            "dlt_templates": dlt_templates, "default_country": rd.effective_country(ctx, None)}

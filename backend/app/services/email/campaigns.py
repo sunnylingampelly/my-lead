@@ -21,6 +21,7 @@ from app.models.email import EmailCampaign, EmailEvent, EmailMessage, EmailSende
 from app.providers.email.base import OutboundEmail
 from app.schemas.common import Page, PageParams
 from app.schemas.email import (
+    MAX_AUDIENCE_CONTACT_IDS,
     CampaignCreate,
     CampaignListItem,
     CampaignOut,
@@ -33,6 +34,7 @@ from app.schemas.email import (
     ReadinessCheck,
     ScheduleRequest,
     TestSendRequest,
+    without_design,
 )
 from app.services import audit_service
 from app.services.audience.query import base_query, count, eligibility_condition
@@ -45,6 +47,8 @@ from app.utils.time import utcnow
 
 EDITABLE = ("draft",)
 ACTIVE = ("queued", "sending", "paused")
+MAX_DESIGN_BYTES = 8_000_000
+MAX_RECIPIENT_IDS = 5000
 
 
 # ------------------------------------------------------------------ helpers
@@ -106,9 +110,7 @@ def stats_for(db: Session, campaign_ids: list[str]) -> dict[str, CampaignStats]:
 
 
 def to_out(db: Session, c: EmailCampaign) -> CampaignOut:
-    out = CampaignOut.model_validate(c)
-    out.stats = stats_for(db, [c.id]).get(c.id, CampaignStats())
-    return out
+    return without_design(CampaignOut, c, stats=stats_for(db, [c.id]).get(c.id, CampaignStats()))
 
 
 # ------------------------------------------------------------------ audience
@@ -132,7 +134,32 @@ def audience_condition(db: Session, ctx, audience: dict):
         if seg is None:
             raise ValidationFailed("One or more segments no longer exist", code="INVALID_AUDIENCE")
         parts.append(compile_rules(db, ctx, seg.rules))
+    contact_ids = list(dict.fromkeys(audience.get("contact_ids") or []))
+    if contact_ids:
+        if len(contact_ids) > MAX_AUDIENCE_CONTACT_IDS:
+            raise ValidationFailed(f"Choose at most {MAX_AUDIENCE_CONTACT_IDS:,} individual contacts; use a list or "
+                                   "segment for more", code="INVALID_AUDIENCE")
+        found = db.scalar(select(func.count()).select_from(Contact).where(
+            Contact.id.in_(contact_ids), Contact.application_id == ctx.application_id)) or 0
+        if found != len(contact_ids):
+            raise ValidationFailed("Some of the chosen contacts no longer exist in this application",
+                                   code="INVALID_AUDIENCE")
+        parts.append(Contact.id.in_(contact_ids))
     return or_(*parts) if parts else false()
+
+
+def audience_chosen(audience: dict | None) -> bool:
+    a = audience or {}
+    return bool(a.get("all") or a.get("list_ids") or a.get("segment_ids") or a.get("contact_ids"))
+
+
+def initial_audience(db: Session, ctx, audience) -> dict:
+    """Audience for a new draft (e.g. created from a segment, list or a selection of contacts)."""
+    if audience is None:
+        return {"all": False, "list_ids": [], "segment_ids": [], "contact_ids": []}
+    a = audience.model_dump() if hasattr(audience, "model_dump") else dict(audience)
+    audience_condition(db, ctx, a)  # validate references
+    return a
 
 
 def estimate(db: Session, ctx, audience: dict) -> Estimate:
@@ -159,46 +186,54 @@ def estimate(db: Session, ctx, audience: dict) -> Estimate:
 # ------------------------------------------------------------------ readiness
 
 def readiness(db: Session, ctx, c: EmailCampaign) -> tuple[list[ReadinessCheck], Estimate | None]:
+    from app.services.email.readiness import app_url, check, wallet_check
+
     checks = []
+    senders_url = app_url(ctx, "/email/senders")
     sender = db.get(EmailSender, c.sender_id) if c.sender_id else None
-    sender_ok = sender is not None and sender.application_id == c.application_id and sender.status == "verified"
-    checks.append(ReadinessCheck(key="sender", label="Verified sender", ok=sender_ok,
-                                 detail=None if sender_ok else ("Choose a sender" if sender is None else
-                                                                f"{sender.from_email} is not verified yet")))
-    checks.append(ReadinessCheck(key="subject", label="Subject line", ok=bool((c.subject or "").strip()),
-                                 detail=None if (c.subject or "").strip() else "Add a subject"))
+    if sender is not None and sender.application_id != c.application_id:
+        sender = None
+    sender_ok = sender is not None and sender.status == "verified"
+    checks.append(check(
+        "sender", "Verified sender", sender_ok,
+        "Choose a sender address" if sender is None else
+        f"{sender.from_email} is not verified yet. Open the confirmation email we sent to it, or resend it.",
+        step="setup", action_url=senders_url, action_label="Manage senders",
+        meta={"sender_id": sender.id, "status": sender.status, "from_email": sender.from_email} if sender else None))
+    checks.append(check("subject", "Subject line", bool((c.subject or "").strip()), "Add a subject", step="setup"))
     has_body = bool((c.html or "").strip() or (c.text or "").strip())
-    checks.append(ReadinessCheck(key="content", label="Email content", ok=has_body,
-                                 detail=None if has_body else "Design the email"))
+    checks.append(check("content", "Email content", has_body, "Design the email", step="content"))
     issues = render.check([c.subject, c.preheader, c.html, c.text], custom_keys(db, c.application_id))
     detail = None
     if issues.unknown:
         detail = "Unknown fields: " + ", ".join(issues.unknown)
     elif issues.malformed:
         detail = "Unsupported template syntax: " + ", ".join(issues.malformed[:3])
-    checks.append(ReadinessCheck(key="personalisation", label="Personalisation fields", ok=issues.ok, detail=detail))
+    checks.append(check("personalisation", "Personalisation fields", issues.ok, detail, step="content"))
     s = _settings(db, c.application_id)
     region = profile_for(ctx.application.default_country if ctx.application else None)
     need_addr = region.email_requires_postal_address
     addr_ok = bool(s and (s.business_address or "").strip()) or not need_addr
-    checks.append(ReadinessCheck(
-        key="postal_address", label="Postal address in footer", ok=addr_ok,
-        detail=None if addr_ok else f"{region.name} rules (CAN-SPAM) require a physical postal address. "
-                                    "Add it in Application settings → Compliance."))
+    checks.append(check(
+        "postal_address", "Postal address in footer", addr_ok,
+        f"{region.name} rules (CAN-SPAM) require a physical postal address in marketing email. "
+        "Add it in Application settings → Compliance.",
+        action_url=app_url(ctx, "/settings?tab=compliance"), action_label="Add address"))
     est = None
     try:
         est = estimate(db, ctx, c.audience or {})
         aud_ok = est.eligible > 0
-        aud_detail = None if aud_ok else ("Choose an audience" if not est.matched else
-                                          "No one in this audience can receive marketing email")
+        aud_detail = ("Choose who should receive this email" if not est.matched else
+                      "No one in this audience can receive marketing email (they need an email address and "
+                      "email consent)")
     except ValidationFailed as exc:
         aud_ok, aud_detail = False, exc.message
-    checks.append(ReadinessCheck(key="audience", label="Audience with reachable contacts", ok=aud_ok, detail=aud_detail))
+    checks.append(check("audience", "Audience with reachable contacts", aud_ok, aud_detail, step="audience"))
     if est and est.eligible > 0:
         from app.services.billing import wallet as wl
 
         price, cur = wl.email_price(region.code)
-        checks.append(wl.wallet_check(db, c.organization_id, price * est.eligible, cur))
+        checks.append(wallet_check(db, ctx, price * est.eligible, cur))
     return checks, est
 
 
@@ -235,9 +270,11 @@ def create_campaign(db: Session, ctx: AppContext, data: CampaignCreate) -> Email
     ctx.require(Perm.CAMPAIGNS_WRITE)
     c = EmailCampaign(organization_id=ctx.organization_id, application_id=ctx.application_id, name=data.name.strip(),
                       description=data.description, campaign_type=data.campaign_type, created_by_id=ctx.user.id,
-                      audience={"all": False, "list_ids": [], "segment_ids": []})
-    default_sender = db.scalar(select(EmailSender).where(EmailSender.application_id == ctx.application_id,
-                                                         EmailSender.is_default.is_(True)))
+                      audience=initial_audience(db, ctx, data.audience))
+    # Prefer a verified sender: the default if it is verified, otherwise any verified one, else the default.
+    default_sender = db.scalar(select(EmailSender).where(EmailSender.application_id == ctx.application_id)
+                               .order_by((EmailSender.status == "verified").desc(), EmailSender.is_default.desc(),
+                                         EmailSender.created_at).limit(1))
     if default_sender:
         c.sender_id, c.from_name, c.from_email = default_sender.id, default_sender.from_name, default_sender.from_email
         c.reply_to = default_sender.reply_to
@@ -277,6 +314,18 @@ def update_campaign(db: Session, ctx: AppContext, campaign_id: str, data: Campai
             c.from_name = c.from_email = None
     if "audience" in changes and changes["audience"] is not None:
         audience_condition(db, ctx, changes["audience"])  # validate references
+    if changes.get("design") is not None:
+        import json
+
+        try:
+            size = len(json.dumps(changes["design"]))
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed("The email design could not be read. Reload the editor and try again.",
+                                   code="INVALID_DESIGN") from exc
+        if size > MAX_DESIGN_BYTES:
+            raise ValidationFailed(f"The email design is too large to save ({size // 1_000_000} MB; the limit is "
+                                   f"{MAX_DESIGN_BYTES // 1_000_000} MB). Remove embedded images or large blocks.",
+                                   code="DESIGN_TOO_LARGE")
     for k, v in changes.items():
         setattr(c, k, v)
     return c
@@ -497,7 +546,7 @@ def report(db: Session, ctx: AppContext, campaign_id: str) -> dict:
                        .where(EmailEvent.campaign_id == c.id, EmailEvent.type == "clicked")
                        .group_by(EmailEvent.url).order_by(func.count().desc()).limit(10)).all()
     return {
-        "campaign": to_out(db, c).model_dump(mode="json"),
+        "campaign": to_out(db, c).model_dump(mode="json", exclude={"design"}),
         "stats": st.model_dump(),
         "rates": {
             # Denominators are explicit so numbers can be audited.
@@ -515,19 +564,47 @@ def report(db: Session, ctx: AppContext, campaign_id: str) -> dict:
     }
 
 
+def _filter_messages(q, status: str | None):
+    m = EmailMessage
+    if status == "opened":
+        return q.where(m.first_opened_at.is_not(None))
+    if status == "clicked":
+        return q.where(m.first_clicked_at.is_not(None))
+    if status == "unsubscribed":
+        return q.where(m.unsubscribed_at.is_not(None))
+    if status == "bounced":
+        return q.where(m.bounced_at.is_not(None))
+    if status == "complained":
+        return q.where(m.complained_at.is_not(None))
+    if status == "not_opened":  # delivered (or at least accepted) but never opened
+        return q.where(m.accepted_at.is_not(None), m.bounced_at.is_(None), m.first_opened_at.is_(None))
+    if status == "not_clicked":
+        return q.where(m.accepted_at.is_not(None), m.bounced_at.is_(None), m.first_clicked_at.is_(None))
+    if status:
+        return q.where(m.status == status)
+    return q
+
+
+def recipient_ids(db: Session, ctx: AppContext, campaign_id: str, status: str | None) -> dict:
+    """Contact ids behind a report filter, for bulk actions (tag, list, task, workflow, resend)."""
+    ctx.require(Perm.CAMPAIGNS_READ)
+    c = _get(db, ctx, campaign_id)
+    q = _filter_messages(select(EmailMessage.contact_id).where(EmailMessage.campaign_id == c.id,
+                                                               EmailMessage.contact_id.is_not(None)), status)
+    return capped_ids(db, q)
+
+
+def capped_ids(db: Session, q) -> dict:
+    total = db.scalar(select(func.count()).select_from(q.distinct().subquery())) or 0
+    ids = list(db.scalars(q.distinct().limit(MAX_RECIPIENT_IDS)))
+    return {"contact_ids": ids, "total": total, "truncated": total > len(ids), "limit": MAX_RECIPIENT_IDS}
+
+
 def list_messages(db: Session, ctx: AppContext, campaign_id: str, params: PageParams, status: str | None,
                   search: str | None) -> Page[MessageOut]:
     ctx.require(Perm.CAMPAIGNS_READ)
     c = _get(db, ctx, campaign_id)
-    q = select(EmailMessage).where(EmailMessage.campaign_id == c.id)
-    if status == "opened":
-        q = q.where(EmailMessage.first_opened_at.is_not(None))
-    elif status == "clicked":
-        q = q.where(EmailMessage.first_clicked_at.is_not(None))
-    elif status == "unsubscribed":
-        q = q.where(EmailMessage.unsubscribed_at.is_not(None))
-    elif status:
-        q = q.where(EmailMessage.status == status)
+    q = _filter_messages(select(EmailMessage).where(EmailMessage.campaign_id == c.id), status)
     if search:
         q = q.where(EmailMessage.to_email.like(f"%{search.strip().lower()}%"))
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0

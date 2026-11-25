@@ -12,6 +12,7 @@ from app.core.security import generate_token, hash_token
 from app.models import Invitation, Organization, OrganizationMember, User
 from app.schemas.organization import InvitationCreate, InvitationOut, InvitationPreview
 from app.services import audit_service, mail_templates
+from app.services.billing import plans
 from app.services.notification_service import notify
 from app.services.notifications import enqueue_system_email
 from app.services.organization_service import set_member_applications, validate_application_ids
@@ -48,6 +49,13 @@ def create_invitation(db: Session, ctx: OrgContext, data: InvitationCreate) -> I
         db, ctx.organization_id, data.application_ids)
     if data.role not in ORG_WIDE_ROLES and not app_ids:
         raise ValidationFailed("Select at least one application for this role", code="APPLICATIONS_REQUIRED")
+    # Members plus pending invitations count toward the plan's seats; re-inviting the same address
+    # replaces its pending invitation rather than taking another seat.
+    resent = db.scalar(select(func.count(Invitation.id)).where(
+        Invitation.organization_id == ctx.organization_id, Invitation.email == data.email,
+        Invitation.status == "pending", Invitation.expires_at > utcnow())) or 0
+    plans.check_limit(db, ctx.organization_id, "members",
+                      plans.count_usage(db, ctx.organization_id, "members") - resent)
     # Supersede any older pending invite to the same address.
     for old in db.scalars(select(Invitation).where(Invitation.organization_id == ctx.organization_id,
                                                    Invitation.email == data.email, Invitation.status == "pending")):
@@ -98,6 +106,8 @@ def resend_invitation(db: Session, ctx: OrgContext, invitation_id: str) -> Invit
     inv = _get(db, ctx, invitation_id)
     if inv.status != "pending":
         raise Conflict("Only pending invitations can be resent")
+    if inv.expires_at < utcnow():  # an expired invitation no longer holds a seat
+        plans.check_limit(db, ctx.organization_id, "members", plans.count_usage(db, ctx.organization_id, "members"))
     token = generate_token()
     inv.token_hash = hash_token(token)  # old link stops working
     inv.expires_at = utcnow() + timedelta(days=settings.INVITATION_TTL_DAYS)

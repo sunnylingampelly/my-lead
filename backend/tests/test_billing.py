@@ -90,6 +90,29 @@ def test_email_hold_settlement_idempotent_and_released(india):
     assert csv.status_code == 200 and "usage,email,Email usage: Offer" in csv.text
 
 
+def test_org_billing_filtered_to_one_application(india, owner):
+    """The one Billing page can narrow usage to an application; balance stays organization-wide and an
+    application from another organization never matches anything."""
+    a = india
+    cid = email_campaign(a)
+    assert a.post(f"{a.base}/email/campaigns/{cid}/send").status_code == 200
+    wl.run_settlement()
+    second = a.post("/applications", json={"organization_id": a.org["id"], "name": "Chai Two", "default_country": "IN",
+                                          "timezone": "Asia/Kolkata"}).json()["id"]
+    whole = a.get(a.b).json()
+    mine = a.get(a.b, params={"application_id": a.app_id}).json()
+    other = a.get(a.b, params={"application_id": second}).json()
+    assert mine["month_usage"]["total"] == pytest.approx(0.10) == whole["month_usage"]["total"]
+    assert other["month_usage"]["total"] == 0 and other["daily_usage"][-1]["amount"] == 0
+    assert mine["balance"] == other["balance"] == whole["balance"]
+    assert a.get(f"{a.b}/transactions", params={"application_id": second}).json()["total"] == 0
+    # Another organization's application id: nothing from this wallet, and nothing about the other org.
+    foreign = owner.post("/applications", json={"organization_id": owner.org["id"], "name": "Elsewhere"}).json()["id"]
+    leak = a.get(a.b, params={"application_id": foreign}).json()
+    assert leak["month_usage"]["total"] == 0 and leak["currency"] == "INR"
+    assert all(p["application_id"] != foreign for p in leak["per_application"])
+
+
 def test_low_balance_blocks_launch_and_notifies(india):
     a = india
     cid = email_campaign(a)

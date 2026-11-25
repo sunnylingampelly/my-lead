@@ -1,7 +1,7 @@
-import type { CampaignAudience, CampaignStatus, Estimate } from './email'
+import type { CampaignAudience, CampaignStatus, Estimate, ReadinessCheck, WalletInfo } from './email'
 
 export type SmsCategory = 'promotional' | 'transactional' | 'service'
-export type SmsCountry = 'IN' | 'US'
+export type SmsCountry = 'IN' | 'AE' | 'US'
 export type SenderKind = 'promotional' | 'service' | 'transactional' | 'long_code' | 'toll_free' | 'short_code'
 
 export interface DltConfig {
@@ -10,9 +10,11 @@ export interface DltConfig {
   dlt_platform: string | null
   us_brand_id: string | null
   us_campaign_id: string | null
-  us_messaging_service_sid: string | null
   attested_at: string | null
   attested_by_name: string | null
+  /** UAE: "UAE-licensed and consents uploaded to TDRA's Consent Management System". */
+  uae_attested_at?: string | null
+  uae_attested_by_name?: string | null
 }
 
 export interface SmsSender {
@@ -20,7 +22,7 @@ export interface SmsSender {
   sender_id: string
   country: SmsCountry
   kind: SenderKind
-  provider: 'simulation' | 'msg91' | 'twilio'
+  provider: 'simulation' | 'sns'
   dlt_header_id: string | null
   status: 'pending' | 'active'
   is_default: boolean
@@ -98,11 +100,32 @@ export interface MessageShape {
 
 export interface SmsReadiness {
   ready: boolean
-  checks: { key: string; label: string; ok: boolean; detail: string | null }[]
+  checks: ReadinessCheck[]
   estimate: Estimate | null
   message: MessageShape
   cost: { unit_price: number; currency: string; total: number }
+  country: SmsCountry | null
+  sender_chosen: boolean
+  wallet: WalletInfo
+  quiet_hours: QuietWait
   custom_keys: string[]
+}
+
+export interface SendWindow {
+  start: string | null
+  end: string | null
+  reason: string
+  legal: [string, string] | null
+  quiet: [string, string]
+}
+
+/** How many recipients would wait if sent now, and until when. */
+export interface QuietWait {
+  applies?: boolean
+  window: SendWindow
+  waiting: number
+  next_window_at: string | null
+  timezone: string | null
 }
 
 export interface SmsMessage {
@@ -140,7 +163,16 @@ export interface SmsOverview {
   recent: SmsCampaignListItem[]
   upcoming: SmsCampaignListItem[]
   senders: Record<string, number>
-  registration: { india: boolean; us: boolean }
+  registration: { india: boolean; us: boolean; uae?: boolean }
+  setup: {
+    consented: { IN: number; AE?: number; US: number }
+    dlt_templates: number
+    default_country: SmsCountry | null
+    /** UAE while SMS_UAE_ENABLED is off: why SMS is "coming soon". */
+    coming_soon?: string | null
+    market_rules?: string[]
+    uae_attested?: boolean
+  }
 }
 
 export interface SmsInboundItem {
@@ -151,4 +183,6 @@ export interface SmsInboundItem {
   keyword: 'stop' | 'start' | 'help' | null
   contacts_updated: number
   received_at: string
+  contact: { id: string; name: string; email: string | null; owner_id: string | null } | null
+  campaign: { id: string; name: string } | null
 }

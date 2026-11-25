@@ -1,6 +1,10 @@
 import { useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
-import { ChevronDown, ChevronsLeft, ChevronsRight, Clock3 } from 'lucide-react'
+import { Link, NavLink, useLocation } from 'react-router-dom'
+import { ChevronDown, ChevronsLeft, ChevronsRight, Clock3, ListChecks } from 'lucide-react'
+import { useChecklist, useProvidersStatus } from '@/api/queries'
+import { useAiStatus } from '@/api/ai'
+import { openAssistant } from '@/modules/ai/lib'
+import { CHECKLIST_ANCHOR, useChecklistHidden } from '@/modules/dashboard/checklistState'
 import { Logo } from '@/components/logo'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useWorkspace } from '@/hooks/useWorkspace'
@@ -57,6 +61,11 @@ function Item({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boole
     >
       <Icon className="size-4 shrink-0" />
       {!collapsed && <span className="truncate">{item.label}</span>}
+      {!collapsed && item.badge && (
+        <span className="ml-auto rounded bg-sidebar-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sidebar-muted" data-testid={`nav-badge-${item.label}`}>
+          {item.badge}
+        </span>
+      )}
     </NavLink>
   )
 
@@ -88,25 +97,54 @@ function Item({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boole
       </div>
       {expanded && (
         <div className="ml-[17px] mt-0.5 space-y-px border-l border-sidebar-border pl-2.5 animate-in fade-in-0 slide-in-from-top-1">
-          {item.children!.map((c) => (
-            <NavLink
-              key={c.to}
-              to={c.to}
-              end={c.end}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                cn(
-                  'flex h-7 items-center rounded-md px-2 text-[12.5px] transition-colors',
-                  isActive ? 'bg-sidebar-accent font-medium text-white' : 'text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-white',
-                )
-              }
-            >
-              {c.label}
-            </NavLink>
-          ))}
+          {item.children!.map((c) =>
+            c.action === 'assistant' ? (
+              <button
+                key={c.to}
+                type="button"
+                onClick={() => {
+                  onNavigate?.()
+                  openAssistant()
+                }}
+                className="flex h-7 w-full items-center rounded-md px-2 text-left text-[12.5px] text-sidebar-muted transition-colors hover:bg-sidebar-accent/60 hover:text-white"
+                data-testid="nav-ai-assistant"
+              >
+                {c.label}
+              </button>
+            ) : (
+              <NavLink
+                key={c.to}
+                to={c.to}
+                end={c.end}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    'flex h-7 items-center rounded-md px-2 text-[12.5px] transition-colors',
+                    isActive ? 'bg-sidebar-accent font-medium text-white' : 'text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-white',
+                  )
+                }
+              >
+                {c.label}
+                {c.badgeKey === 'approvals' && <ApprovalsBadge />}
+              </NavLink>
+            ),
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+/** Pending AI agent approvals for the current application. */
+function ApprovalsBadge() {
+  const { app } = useWorkspace()
+  const q = useAiStatus(app?.id, !!app?.permissions.includes('ai.manage'))
+  const n = q.data?.pending_approvals ?? 0
+  if (!n) return null
+  return (
+    <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold tabular-nums text-slate-900" aria-label={`${n} waiting`} data-testid="approvals-badge">
+      {n > 99 ? '99+' : n}
+    </span>
   )
 }
 
@@ -152,12 +190,44 @@ function ComingSoon({ items, collapsed }: { items: NavItem[]; collapsed: boolean
   )
 }
 
+/** "Setup x/y" progress pill linking to the dashboard checklist; hidden when complete or dismissed. */
+function SetupPill({ appId, collapsed, onNavigate }: { appId: string; collapsed: boolean; onNavigate?: () => void }) {
+  const hidden = useChecklistHidden(appId)
+  const q = useChecklist(appId, !hidden)
+  if (hidden || !q.data?.length) return null
+  const done = q.data.filter((c) => c.done).length
+  if (done === q.data.length) return null
+  const to = `/apps/${appId}#${CHECKLIST_ANCHOR}`
+  const label = `Setup ${done}/${q.data.length}`
+  if (collapsed)
+    return (
+      <Tooltip content={label} side="right">
+        <Link to={to} onClick={onNavigate} aria-label={label} className="flex size-7 items-center justify-center rounded-md text-indigo-300 hover:bg-sidebar-accent hover:text-white">
+          <ListChecks className="size-4" />
+        </Link>
+      </Tooltip>
+    )
+  return (
+    <Link
+      to={to}
+      onClick={onNavigate}
+      data-testid="setup-pill"
+      className="flex items-center gap-1.5 rounded-full bg-indigo-500/20 px-2 py-0.5 text-[11px] font-medium text-indigo-200 transition hover:bg-indigo-500/30 hover:text-white"
+    >
+      <ListChecks className="size-3" /> {label}
+    </Link>
+  )
+}
+
 export function Sidebar({ collapsed = false, onToggle, onNavigate }: { collapsed?: boolean; onToggle?: () => void; onNavigate?: () => void }) {
   const { app, org } = useWorkspace()
   const all = appNav(app)
   const live = all.filter((i) => i.to)
   const soon = all.filter((i) => !i.to)
   const orgItems = orgNav(org)
+  const providers = useProvidersStatus(app?.id, !!app?.permissions.includes('settings.read'))
+  // Without app context (org pages) or status, assume simulation: it is the safe default.
+  const simulation = providers.data?.simulation ?? true
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
@@ -212,8 +282,9 @@ export function Sidebar({ collapsed = false, onToggle, onNavigate }: { collapsed
         )}
       </nav>
 
-      <div className={cn('flex h-11 shrink-0 items-center gap-2 border-t border-sidebar-border', collapsed ? 'flex-col justify-center' : 'px-3')}>
-        {!collapsed && org && (
+      <div className={cn('flex min-h-11 shrink-0 items-center gap-2 border-t border-sidebar-border py-2', collapsed ? 'flex-col justify-center' : 'px-3')}>
+        {app && <SetupPill appId={app.id} collapsed={collapsed} onNavigate={onNavigate} />}
+        {!collapsed && org && simulation && (
           <Tooltip content="Simulation mode: messages are never sent to real people until a provider is connected." side="top">
             <span className="flex cursor-default items-center gap-1.5 rounded-full bg-sidebar-accent px-2 py-0.5 text-[11px] font-medium text-sidebar-foreground">
               <span className="size-1.5 animate-pulse rounded-full bg-amber-400" /> Simulation

@@ -13,7 +13,7 @@ from app.schemas.application import (
     AppMemberOut,
     MyApplicationOut,
 )
-from app.services import application_service, dashboard_service
+from app.services import application_service, dashboard_service, provider_status
 from app.services.tenancy import resolve_org_context
 
 router = APIRouter(tags=["Applications"])
@@ -104,3 +104,15 @@ def regions(user: CurrentUser):
 @router.get("/apps/{app_id}/dashboard")
 def dashboard(ctx: AppCtx, db: DB):
     return dashboard_service.overview(db, ctx)
+
+
+@router.get("/apps/{app_id}/dashboard/checklist")
+def dashboard_checklist(ctx: AppCtx, db: DB):
+    """Just the getting-started steps (light enough for the sidebar's setup progress)."""
+    return dashboard_service.checklist(db, ctx)
+
+
+@router.get("/apps/{app_id}/providers/status")
+def providers_status(ctx: AppCtx):
+    """Which delivery providers are connected on the platform and whether sending is simulated."""
+    return provider_status.status(ctx)

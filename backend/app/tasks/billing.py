@@ -7,3 +7,10 @@ def settle_usage() -> dict:
     from app.services.billing.wallet import run_settlement
 
     return run_settlement()
+
+
+@celery_app.task(name="app.tasks.billing.renew_subscriptions")
+def renew_subscriptions() -> dict:
+    from app.services.billing.subscriptions import run_renewals
+
+    return run_renewals()

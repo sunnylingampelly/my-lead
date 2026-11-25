@@ -35,6 +35,11 @@ def get_current_user(
     # Checking the session makes logout and password changes take effect immediately.
     session = auth_service.get_active_session(db, payload["sid"])
     if session is None or session.user_id != payload["sub"]:
+        # A session that was only rotated (another tab refreshed the shared cookie) is not a sign-out:
+        # report an expired token so the client refreshes with the current cookie. Logout, password
+        # changes and reuse detection keep their other reasons and still end the session at once.
+        if auth_service.was_rotated(db, payload["sid"], payload["sub"]):
+            raise Unauthorized("Access token expired", code="TOKEN_EXPIRED")
         raise Unauthorized("Session is no longer valid", code="SESSION_REVOKED")
     user = db.get(User, payload["sub"])
     if user is None or user.deleted_at is not None:

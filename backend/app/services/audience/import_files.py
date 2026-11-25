@@ -139,6 +139,8 @@ _SYNONYMS = {
     "source": ["source", "lead source"],
     "tags": ["tags", "tag", "labels"],
     "timezone": ["timezone", "time zone", "tz"],
+    "owner_email": ["owner", "owner email", "contact owner", "sales rep", "assigned to", "account owner"],
+    "lifecycle_stage": ["lifecycle stage", "lifecycle", "lead status", "lead stage"],
 }
 
 

@@ -51,13 +51,15 @@ class Settings(BaseSettings):
     # Provider send rate for live campaigns (messages per second). SES sandbox default is 1, production ~14.
     EMAIL_RATE_PER_SECOND: float = 14.0
 
-    # SMS providers (used only when COMMUNICATION_MODE=live)
+    # SMS goes through Amazon SNS (used only when COMMUNICATION_MODE=live), with the AWS_* credentials
+    # below. Delivery receipts are read from SNS delivery status logs in CloudWatch; replies (STOP)
+    # arrive from an SNS topic at /api/v1/webhooks/sms/sns. AWS_ACCOUNT_ID skips an STS lookup.
+    AWS_ACCOUNT_ID: str | None = None
+    SNS_SMS_RECEIPTS_ENABLED: bool = True
+    SMS_RATE_PER_SECOND: float = 10.0
+    # Voice providers (used only when COMMUNICATION_MODE=live).
     TWILIO_ACCOUNT_SID: str | None = None
     TWILIO_AUTH_TOKEN: str | None = None
-    MSG91_AUTH_KEY: str | None = None
-    MSG91_WEBHOOK_TOKEN: str | None = None
-    SMS_RATE_PER_SECOND: float = 10.0
-    # Voice providers (used only when COMMUNICATION_MODE=live). Twilio credentials are shared with SMS.
     EXOTEL_SID: str | None = None
     EXOTEL_API_KEY: str | None = None
     EXOTEL_API_TOKEN: str | None = None
@@ -99,6 +101,37 @@ class Settings(BaseSettings):
         "US": {"currency": "USD", "per_minute": 0.0140},
         "default": {"currency": "USD", "per_minute": 0.10},
     }
+    # AI calling agents: price per started minute of an answered AI-agent call (replaces VOICE_PRICING for
+    # those calls; usage discounts apply at settlement). Estimates assume AI_CALL_EXPECTED_MINUTES per answer.
+    VOICE_AI_PRICING: dict = {
+        "IN": {"currency": "INR", "per_minute": 6.0},
+        "US": {"currency": "USD", "per_minute": 0.12},
+        "default": {"currency": "USD", "per_minute": 0.15},
+    }
+    AI_CALL_EXPECTED_MINUTES: int = 2
+    # Claude for AI calling agents. Without a key, test chats and simulated calls use an offline responder.
+    ANTHROPIC_API_KEY: str | None = None
+    AI_AGENT_MODEL: str = "claude-opus-5-5"
+    AI_AGENT_EFFORT: str = "low"  # effort for live conversation turns (latency matters on a phone call)
+    # Website chatbots (live chat). Each AI reply is charged per reply by the app's default country (usage
+    # discounts apply); human live chat and simulated replies (no ANTHROPIC_API_KEY) are free.
+    CHAT_AI_MODEL: str = "claude-opus-5-5"
+    CHAT_AI_EFFORT: str = "low"
+    CHAT_AI_PRICING: dict = {
+        "IN": {"currency": "INR", "per_reply": 1.50},
+        "US": {"currency": "USD", "per_reply": 0.02},
+        "default": {"currency": "USD", "per_reply": 0.02},
+    }
+    # Knowledge up to this size goes whole into the (cached) system prompt; above it, the best chunks are
+    # retrieved per question with MariaDB FULLTEXT search.
+    CHAT_KNOWLEDGE_INLINE_CHARS: int = 150_000
+    CHAT_KNOWLEDGE_MAX_CHARS: int = 2_000_000  # per bot, all sources
+    CHAT_FETCH_MAX_BYTES: int = 3_000_000
+    CHAT_CRAWL_MAX_PAGES: int = 25
+    CHAT_UPLOAD_MAX_BYTES: int = 10_000_000
+    # Days a released number rests before it goes back to the pool, and the grace period for unpaid rent.
+    NUMBER_QUARANTINE_DAYS: int = 7
+    NUMBER_RENEWAL_GRACE_DAYS: int = 7
     # Price per SMS segment by country and category; platform admins will manage this in Phase 8.
     SMS_PRICING: dict = {
         "IN": {"currency": "INR", "promotional": 0.25, "transactional": 0.20, "service": 0.20},
@@ -120,6 +153,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTH_PER_MINUTE: int = 20
     RATE_LIMIT_REGISTER_PER_MINUTE: int = 10
+    # Cloudflare Turnstile for lead forms (optional; forms opt in once both keys are set).
+    TURNSTILE_SITE_KEY: str | None = None
+    TURNSTILE_SECRET_KEY: str | None = None
 
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = False
@@ -148,10 +184,6 @@ class Settings(BaseSettings):
             if not self.COOKIE_SECURE:
                 raise ValueError("COOKIE_SECURE must be true in production")
         return self
-
-    @property
-    def is_sqlite(self) -> bool:
-        return self.DATABASE_URL.startswith("sqlite")
 
     @property
     def dev_mailbox_active(self) -> bool:

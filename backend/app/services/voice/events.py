@@ -50,7 +50,7 @@ def apply(db: Session, call: VoiceCall, type_: str, *, occurred_at: datetime | N
         call.digits = (digits or "")[:10]
         campaign = db.get(VoiceCampaign, call.campaign_id)
         if digits == rules.OPT_OUT_DIGIT and campaign and (campaign.snapshot or {}).get("opt_out_keypress", True):
-            _opt_out(db, call)
+            opt_out(db, call)
         return True
     if call.status in FINAL:
         return True
@@ -74,7 +74,7 @@ def apply(db: Session, call: VoiceCall, type_: str, *, occurred_at: datetime | N
         call.status = "voicemail" if call.answered_by == "machine" else "completed"
         call.answered_at = call.answered_at or at
         call.billable_minutes = rules.billable_minutes(call.duration_seconds)
-        unit, _ = rules.price_per_minute(call.country)
+        unit, _ = rules.price_per_minute(call.country, ai=bool(call.agent_id))
         call.cost = Decimal(str(round(call.billable_minutes * unit, 4)))
         call.error_code = call.error_message = None
         return True
@@ -95,16 +95,16 @@ def apply(db: Session, call: VoiceCall, type_: str, *, occurred_at: datetime | N
     return True
 
 
-def _opt_out(db: Session, call: VoiceCall) -> None:
+def opt_out(db: Session, call: VoiceCall, method: str = "keypress", source: str | None = None) -> None:
     if call.opted_out:
         return
     call.opted_out = True
+    source = source or f"Pressed {rules.OPT_OUT_DIGIT} during a call"
     ctx = Ctx(call.organization_id, call.application_id, db.get(Application, call.application_id))
     contact = db.get(Contact, call.contact_id) if call.contact_id else None
     if contact is not None and contact.phone == call.to_phone:
         if contact.voice_unsubscribed_at is None or contact.voice_consent:
-            consent_svc.revoke(db, ctx, contact, "voice", method="keypress",
-                               source=f"Pressed {rules.OPT_OUT_DIGIT} during a call")
+            consent_svc.revoke(db, ctx, contact, "voice", method=method, source=source)
     else:
         consent_svc.suppress(db, ctx, "voice", identifier_hash(call.to_phone), mask_phone(call.to_phone),
-                             "unsubscribed", "keypress")
+                             "unsubscribed", method)

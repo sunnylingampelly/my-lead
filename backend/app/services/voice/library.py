@@ -1,7 +1,8 @@
-"""Caller IDs and the audio library (uploaded recordings and text-to-speech scripts)."""
+"""The audio library: uploaded recordings and text-to-speech scripts. (Calls come from Signalcraft-managed
+numbers picked automatically, see services/voice/numbers.py.)"""
 import io
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -9,13 +10,12 @@ from app.core.errors import Conflict, NotFound, ValidationFailed
 from app.core.logging import get_logger
 from app.core.permissions import Perm
 from app.integrations.storage import build_key, get_storage
-from app.models.voice import VoiceAudio, VoiceCallerId, VoiceCampaign
-from app.schemas.voice import AudioOut, AudioUpdate, CallerIn, TtsIn
+from app.models.voice import VoiceAudio, VoiceCampaign
+from app.schemas.voice import AudioOut, AudioUpdate, TtsIn
 from app.services import audit_service
 from app.services.email import render, tokens
 from app.services.tenancy import AppContext
 from app.services.voice import rules
-from app.utils.time import utcnow
 
 log = get_logger(__name__)
 
@@ -28,69 +28,6 @@ def _audit(db: Session, ctx, action: str, target_type: str, target_id: str, summ
     audit_service.record(db, action, actor_user_id=ctx.user.id, organization_id=ctx.organization_id,
                          application_id=ctx.application_id, target_type=target_type, target_id=target_id,
                          summary=summary)
-
-
-# ------------------------------------------------------------------ caller IDs
-
-
-def caller_row(db: Session, ctx, caller_id: str) -> VoiceCallerId:
-    c = db.scalar(select(VoiceCallerId).where(VoiceCallerId.id == caller_id,
-                                              VoiceCallerId.application_id == ctx.application_id))
-    if c is None:
-        raise NotFound("Caller ID not found")
-    return c
-
-
-def list_callers(db: Session, ctx: AppContext) -> list[VoiceCallerId]:
-    ctx.require(Perm.CAMPAIGNS_READ)
-    return list(db.scalars(select(VoiceCallerId).where(VoiceCallerId.application_id == ctx.application_id)
-                           .order_by(VoiceCallerId.is_default.desc(), VoiceCallerId.created_at)))
-
-
-def create_caller(db: Session, ctx: AppContext, data: CallerIn) -> VoiceCallerId:
-    ctx.require(Perm.SETTINGS_WRITE)
-    err = rules.validate_caller(data.country, data.kind, data.number)
-    if err:
-        raise ValidationFailed(err, code="INVALID_CALLER_ID", details=[{"field": "number", "message": err}])
-    if data.provider == "exotel" and data.country != "IN":
-        raise ValidationFailed("Exotel is used for Indian numbers", code="PROVIDER_COUNTRY_MISMATCH")
-    if db.scalar(select(VoiceCallerId.id).where(VoiceCallerId.application_id == ctx.application_id,
-                                                VoiceCallerId.number == data.number)):
-        raise Conflict(f"{data.number} is already added", code="CALLER_EXISTS")
-    first = not db.scalar(select(func.count()).select_from(VoiceCallerId).where(
-        VoiceCallerId.application_id == ctx.application_id))
-    c = VoiceCallerId(organization_id=ctx.organization_id, application_id=ctx.application_id, number=data.number,
-                      label=data.label, country=data.country, kind=data.kind, provider=data.provider,
-                      status="pending", is_default=bool(first))
-    db.add(c)
-    db.flush()
-    _audit(db, ctx, "voice.caller_created", "voice_caller", c.id, c.number)
-    return c
-
-
-def attest_caller(db: Session, ctx: AppContext, caller_id: str) -> VoiceCallerId:
-    ctx.require(Perm.SETTINGS_WRITE)
-    c = caller_row(db, ctx, caller_id)
-    c.status, c.attested_by_id, c.attested_at = "active", ctx.user.id, utcnow()
-    _audit(db, ctx, "voice.caller_attested", "voice_caller", c.id, c.number)
-    return c
-
-
-def make_default(db: Session, ctx: AppContext, caller_id: str) -> VoiceCallerId:
-    ctx.require(Perm.SETTINGS_WRITE)
-    c = caller_row(db, ctx, caller_id)
-    db.execute(update(VoiceCallerId).where(VoiceCallerId.application_id == ctx.application_id).values(is_default=False))
-    c.is_default = True
-    return c
-
-
-def delete_caller(db: Session, ctx: AppContext, caller_id: str) -> None:
-    ctx.require(Perm.SETTINGS_WRITE)
-    c = caller_row(db, ctx, caller_id)
-    if db.scalar(select(VoiceCampaign.id).where(VoiceCampaign.caller_ref == c.id, VoiceCampaign.status.in_(ACTIVE))):
-        raise Conflict("This caller ID is used by a scheduled or active campaign", code="CALLER_IN_USE")
-    db.delete(c)
-    _audit(db, ctx, "voice.caller_deleted", "voice_caller", caller_id, c.number)
 
 
 # ------------------------------------------------------------------ audio

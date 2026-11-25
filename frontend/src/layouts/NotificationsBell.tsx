@@ -15,6 +15,9 @@ const ICON = {
   error: { icon: XCircle, cls: 'text-danger-strong bg-danger-soft' },
 }
 
+// Notifications created without a link still lead somewhere useful.
+const FALLBACK_LINKS: Record<string, string> = { member_removed: '/' }
+
 export function NotificationsBell() {
   const [open, setOpen] = useState(false)
   const unread = useUnreadCount()
@@ -28,7 +31,8 @@ export function NotificationsBell() {
     setOpen(false)
     if (!n.read_at) await notificationsApi.read(n.id).catch(() => undefined)
     refresh()
-    if (n.link) navigate(n.link)
+    const link = n.link ?? FALLBACK_LINKS[n.type]
+    if (link) navigate(link)
   }
 
   return (

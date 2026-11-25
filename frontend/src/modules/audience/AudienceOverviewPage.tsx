@@ -59,7 +59,7 @@ export function AudienceOverviewPage() {
               <StatCard label="With phone" value={f(q.data.with_phone)} icon={CHANNEL_META.sms.icon} hint={`${f(q.data.consent.sms)} gave SMS consent`} />
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
                 <CardHeader>
                   <CardTitle>Audience growth</CardTitle>
@@ -107,7 +107,7 @@ export function AudienceOverviewPage() {
               </Card>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <Card>
                 <CardHeader>
                   <CardTitle>Where contacts are</CardTitle>

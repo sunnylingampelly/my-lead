@@ -13,8 +13,6 @@ from app.schemas.email import Audience, Estimate, ScheduleRequest
 from app.schemas.voice import (
     AudioOut,
     AudioUpdate,
-    CallerIn,
-    CallerOut,
     CallOut,
     CampaignCreate,
     CampaignListItem,
@@ -23,7 +21,16 @@ from app.schemas.voice import (
     TestCall,
     TtsIn,
 )
-from app.services.voice import campaigns, library, rules, script
+from app.schemas.voice_ai import (
+    AgentCreate,
+    AgentEvaluate,
+    AgentListItem,
+    AgentOut,
+    AgentTest,
+    AgentUpdate,
+)
+from app.services.email.readiness import safe_commit, wallet_info
+from app.services.voice import agents, ai, campaigns, library, rules, script
 
 router = APIRouter(prefix="/apps/{app_id}/voice", tags=["Voice"])
 Paging = Annotated[PageParams, Depends()]
@@ -39,57 +46,104 @@ def options(ctx: AppCtx):
     """Languages, calling windows, pricing and upload limits for the UI."""
     ctx.require(Perm.CAMPAIGNS_READ)
     return {"languages": rules.LANGUAGES, "legal_windows": rules.LEGAL_WINDOW, "pricing": settings.VOICE_PRICING,
+            "ai_pricing": settings.VOICE_AI_PRICING, "ai_expected_minutes": settings.AI_CALL_EXPECTED_MINUTES,
             "opt_out_digit": rules.OPT_OUT_DIGIT, **library.max_upload_info()}
 
 
-# ------------------------------------------------------------------ caller IDs
+# ------------------------------------------------------------------ AI agents
 
 
-@router.get("/callers", response_model=list[CallerOut])
-def list_callers(ctx: AppCtx, db: DB):
-    return library.list_callers(db, ctx)
+@router.get("/ai/status")
+def ai_status(ctx: AppCtx):
+    ctx.require(Perm.CAMPAIGNS_READ)
+    return {"configured": ai.configured(), "model": settings.AI_AGENT_MODEL}
 
 
-@router.get("/provider-numbers")
-def provider_numbers(ctx: AppCtx, provider: str = Query("telnyx", max_length=20)):
-    """Numbers already bought on the platform's Telnyx account, to add as caller IDs."""
-    ctx.require(Perm.SETTINGS_WRITE)
-    if provider != "telnyx" or not settings.TELNYX_API_KEY:
-        return {"configured": False, "numbers": []}
-    from app.providers.voice.telnyx import list_numbers
+@router.get("/agents/templates")
+def agent_templates(ctx: AppCtx):
+    ctx.require(Perm.CAMPAIGNS_READ)
+    return agents.templates()
 
+
+@router.get("/agents", response_model=list[AgentListItem])
+def list_agents(ctx: AppCtx, db: DB):
+    return agents.list_agents(db, ctx)
+
+
+@router.post("/agents", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
+def create_agent(body: AgentCreate, ctx: AppCtx, db: DB):
+    a = agents.create_agent(db, ctx, body)
+    db.commit()
+    return agents.agent_out(db, a)
+
+
+@router.get("/agents/{agent_id}", response_model=AgentOut)
+def get_agent(agent_id: str, ctx: AppCtx, db: DB):
+    ctx.require(Perm.CAMPAIGNS_READ)
+    return agents.agent_out(db, agents.agent_row(db, ctx, agent_id))
+
+
+@router.patch("/agents/{agent_id}", response_model=AgentOut)
+def update_agent(agent_id: str, body: AgentUpdate, ctx: AppCtx, db: DB):
+    a = agents.update_agent(db, ctx, agent_id, body)
+    db.commit()
+    return agents.agent_out(db, a)
+
+
+@router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent(agent_id: str, ctx: AppCtx, db: DB):
+    agents.delete_agent(db, ctx, agent_id)
+    db.commit()
+
+
+@router.post("/agents/{agent_id}/duplicate", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
+def duplicate_agent(agent_id: str, ctx: AppCtx, db: DB):
+    a = agents.duplicate_agent(db, ctx, agent_id)
+    db.commit()
+    return agents.agent_out(db, a)
+
+
+@router.post("/agents/{agent_id}/activate", response_model=AgentOut)
+def activate_agent(agent_id: str, ctx: AppCtx, db: DB):
+    a = agents.set_status(db, ctx, agent_id, True)
+    db.commit()
+    return agents.agent_out(db, a)
+
+
+@router.post("/agents/{agent_id}/deactivate", response_model=AgentOut)
+def deactivate_agent(agent_id: str, ctx: AppCtx, db: DB):
+    a = agents.set_status(db, ctx, agent_id, False)
+    db.commit()
+    return agents.agent_out(db, a)
+
+
+def _test_values(db, ctx, body) -> dict:
+    first = body.contact.first_name if body.contact else None
+    return ai.values_for(first or "Asha", campaigns.business_name(db, ctx))
+
+
+@router.post("/agents/{agent_id}/test")
+def test_agent(agent_id: str, body: AgentTest, ctx: AppCtx, db: DB):
+    """One turn of the browser test chat (the user plays the customer). Uses no wallet credit."""
+    ctx.require(Perm.CAMPAIGNS_WRITE)
+    a = agents.agent_row(db, ctx, agent_id)
+    msgs = [m.model_dump() for m in body.messages]
+    out = ai.reply_sync(agents.snapshot(a), msgs, _test_values(db, ctx, body))
+    return {"reply": out["text"], "end_call": out["end"], "transfer": out["transfer"], "simulated": out["simulated"],
+            "error": out["error"]}
+
+
+@router.post("/agents/{agent_id}/test/evaluate")
+def evaluate_agent(agent_id: str, body: AgentEvaluate, ctx: AppCtx, db: DB):
+    """What a real call would capture from this conversation (summary, interest, outcome fields)."""
+    ctx.require(Perm.CAMPAIGNS_WRITE)
+    a = agents.agent_row(db, ctx, agent_id)
+    transcript = [{"role": m.role, "text": m.content} for m in body.messages]
     try:
-        return {"configured": True, "numbers": list_numbers(settings.TELNYX_API_KEY)}
-    except Exception as exc:  # noqa: BLE001
-        raise ValidationFailed("Could not load numbers from Telnyx. Check the API key.",
-                               code="PROVIDER_ERROR") from exc
-
-
-@router.post("/callers", response_model=CallerOut, status_code=status.HTTP_201_CREATED)
-def create_caller(body: CallerIn, ctx: AppCtx, db: DB):
-    c = library.create_caller(db, ctx, body)
-    db.commit()
-    return c
-
-
-@router.post("/callers/{caller_id}/attest", response_model=CallerOut)
-def attest_caller(caller_id: str, ctx: AppCtx, db: DB):
-    c = library.attest_caller(db, ctx, caller_id)
-    db.commit()
-    return c
-
-
-@router.post("/callers/{caller_id}/default", response_model=CallerOut)
-def default_caller(caller_id: str, ctx: AppCtx, db: DB):
-    c = library.make_default(db, ctx, caller_id)
-    db.commit()
-    return c
-
-
-@router.delete("/callers/{caller_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_caller(caller_id: str, ctx: AppCtx, db: DB):
-    library.delete_caller(db, ctx, caller_id)
-    db.commit()
+        return ai.extract(agents.snapshot(a), transcript, _test_values(db, ctx, body))
+    except Exception as exc:  # noqa: BLE001 - rate limits, outages: tell the user to retry
+        raise ValidationFailed("The AI service couldn't review this conversation right now. Try again.",
+                               code="AI_UNAVAILABLE") from exc
 
 
 # ------------------------------------------------------------------ audio library
@@ -164,7 +218,7 @@ def get_campaign(campaign_id: str, ctx: AppCtx, db: DB):
 @router.patch("/campaigns/{campaign_id}", response_model=CampaignOut)
 def update_campaign(campaign_id: str, body: CampaignUpdate, ctx: AppCtx, db: DB):
     c = campaigns.update_campaign(db, ctx, campaign_id, body)
-    db.commit()
+    safe_commit(db, "the campaign")
     return campaigns.to_out(db, c)
 
 
@@ -186,14 +240,24 @@ def readiness(campaign_id: str, ctx: AppCtx, db: DB):
     ctx.require(Perm.CAMPAIGNS_READ)
     c = campaigns._get(db, ctx, campaign_id)
     checks, est = campaigns.readiness(db, ctx, c)
-    caller = campaigns.caller_of(db, c)
-    country = caller.country if caller else None
+    # Calls go to the application's market from Signalcraft-managed numbers.
+    _, country = campaigns.country_of(db, ctx, c)
     snap = campaigns.draft_snapshot(db, c)
     seconds = script.estimated_seconds(snap) if snap else 0
+    calling = campaigns.calling_window(db, ctx, c, country)
     return {"ready": all(ch.ok for ch in checks), "checks": [ch.model_dump() for ch in checks],
             "estimate": est.model_dump() if est else None, "seconds": seconds,
-            "cost": campaigns.cost_estimate(est.eligible if est else 0, seconds, country),
-            "window": rules.LEGAL_WINDOW.get(country or "", rules.DEFAULT_WINDOW)}
+            "cost": campaigns.cost_estimate(est.eligible if est else 0, seconds, country, ai=campaigns.is_ai(db, c)),
+            "country": country,
+            "window": rules.window_for(country),  # legal window (kept for older clients)
+            "calling_hours": calling, "wallet": wallet_info(db, ctx.organization_id)}
+
+
+@router.get("/campaigns/{campaign_id}/recipients/ids")
+def recipient_ids(campaign_id: str, ctx: AppCtx, db: DB,
+                  status_: str | None = Query(None, alias="status", max_length=20)):
+    """Contact ids behind a report tab (completed, voicemail, opted_out = pressed 9, not_answered…), max 5000."""
+    return campaigns.recipient_ids(db, ctx, campaign_id, status_)
 
 
 @router.get("/campaigns/{campaign_id}/preview")
@@ -256,3 +320,9 @@ def calls(campaign_id: str, ctx: AppCtx, db: DB, paging: Paging,
           status_: str | None = Query(None, alias="status", max_length=20),
           search: str | None = Query(None, max_length=40)):
     return campaigns.list_calls(db, ctx, campaign_id, paging, status_, search)
+
+
+@router.get("/campaigns/{campaign_id}/calls/{call_id}")
+def call_detail(campaign_id: str, call_id: str, ctx: AppCtx, db: DB):
+    """One call, with the AI conversation transcript, summary and captured outcomes."""
+    return campaigns.call_detail(db, ctx, campaign_id, call_id)

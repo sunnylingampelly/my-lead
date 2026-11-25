@@ -1,20 +1,79 @@
-import type { CampaignAudience, CampaignStatus, Estimate } from './email'
+import type { CampaignAudience, CampaignStatus, Estimate, ReadinessCheck, WalletInfo } from './email'
+import type { QuietWait } from './sms'
 
 export type VoiceCategory = 'promotional' | 'transactional' | 'service'
 export type CallerKind = 'series_140' | 'series_160' | 'local' | 'toll_free'
-export type VoiceLanguage = 'en-IN' | 'hi-IN' | 'ta-IN' | 'te-IN' | 'en-US' | 'es-US'
+export type VoiceLanguage = 'en-IN' | 'hi-IN' | 'ta-IN' | 'te-IN' | 'en-US' | 'es-US' | 'ar-AE'
+export type VoiceMessageType = 'audio' | 'tts' | 'ai_agent'
 
-export interface CallerId {
+export type OutcomeFieldType = 'text' | 'yes_no' | 'number' | 'date' | 'choice'
+
+export interface OutcomeField {
+  key: string
+  label: string
+  type: OutcomeFieldType
+  options?: string[] | null
+  description?: string | null
+}
+
+export interface AgentUse {
   id: string
-  number: string
-  label: string | null
-  country: 'IN' | 'US'
-  kind: CallerKind
-  provider: 'simulation' | 'telnyx' | 'exotel' | 'twilio'
-  status: 'pending' | 'active'
-  is_default: boolean
-  attested_at: string | null
+  name: string
+  status: string
+}
+
+export interface VoiceAgent {
+  id: string
+  name: string
+  status: 'draft' | 'active'
+  template: string | null
+  language: VoiceLanguage
+  voice: 'female' | 'male'
+  goal: string | null
+  greeting: string
+  instructions: string
+  knowledge: string | null
+  outcome_fields: OutcomeField[]
+  transfer_number: string | null
+  max_call_minutes: number
+  version: number
   created_at: string
+  updated_at: string
+  used_by: AgentUse[]
+}
+
+export type VoiceAgentListItem = Pick<VoiceAgent, 'id' | 'name' | 'status' | 'template' | 'language' | 'goal' | 'version' | 'updated_at' | 'used_by'>
+
+export interface AgentTemplate {
+  key: string
+  name: string
+  description: string
+  goal: string
+  outcome_fields: OutcomeField[]
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface AgentReply {
+  reply: string
+  end_call: boolean
+  transfer: boolean
+  simulated: boolean
+  error: string | null
+}
+
+export interface CallEvaluation {
+  summary: string
+  sentiment: 'positive' | 'neutral' | 'negative' | null
+  interest: 'hot' | 'warm' | 'cold' | 'not_interested' | null
+  next_step: string | null
+  callback_requested_at: string | null
+  do_not_call: boolean
+  outcomes: Record<string, string | number | boolean | null>
+  simulated: boolean
 }
 
 export interface VoiceAudio {
@@ -59,6 +118,8 @@ export interface VoiceCampaign {
   status: CampaignStatus
   caller_ref: string | null
   audio_id: string | null
+  message_type: VoiceMessageType | null
+  agent_id: string | null
   intro_text: string | null
   opt_out_keypress: boolean
   max_attempts: number
@@ -86,7 +147,7 @@ export type VoiceCampaignListItem = Pick<
 >
 
 export interface ScriptStepView {
-  kind: 'say' | 'play' | 'keypress'
+  kind: 'say' | 'play' | 'keypress' | 'agent'
   text: string | null
   url: string | null
 }
@@ -96,22 +157,30 @@ export interface VoicePreview {
   seconds: number
   language?: VoiceLanguage
   voice?: 'female' | 'male'
+  ai_agent?: boolean
   contact_label: string | null
 }
 
 export interface VoiceReadiness {
   ready: boolean
-  checks: { key: string; label: string; ok: boolean; detail: string | null }[]
+  checks: ReadinessCheck[]
   estimate: Estimate | null
   seconds: number
-  cost: { per_minute: number; currency: string; minutes_per_call: number; total: number }
+  cost: { per_minute: number; currency: string; minutes_per_call: number; total: number; ai?: boolean }
+  /** Legal window for the market (kept for older clients); prefer calling_hours. */
   window: [string, string]
+  country: 'IN' | 'AE' | 'US' | null
+  caller_chosen: boolean
+  calling_hours: QuietWait
+  wallet: WalletInfo
 }
 
 export interface VoiceCall {
   id: string
   contact_id: string | null
   to_phone: string
+  /** The Signalcraft number the call was placed from (picked automatically). */
+  from_number?: string | null
   status: string
   attempts: number
   answered_by: string | null
@@ -127,6 +196,31 @@ export interface VoiceCall {
   next_attempt_at: string | null
   created_at: string
   updated_at: string
+  agent_id: string | null
+  ai_summary: string | null
+  ai_sentiment: string | null
+  ai_interest: string | null
+  ai_next_step: string | null
+  ai_processed_at: string | null
+  contact_name: string | null
+  has_transcript: boolean
+}
+
+export interface TranscriptTurn {
+  role: 'user' | 'assistant'
+  text: string
+  at?: string
+  interrupted?: boolean
+}
+
+export interface VoiceCallDetail extends VoiceCall {
+  campaign: { id: string; name: string }
+  transcript: TranscriptTurn[]
+  agent: { id: string; name: string; version: number } | null
+  ai_outcomes: { key: string; label: string; type: OutcomeFieldType; value: string | number | boolean | null }[]
+  callback_requested_at: string | null
+  do_not_call: boolean
+  simulated: boolean
 }
 
 export interface VoiceReport {
@@ -145,14 +239,25 @@ export interface VoiceOverview {
   last_30_days: VoiceStats & { campaigns: number; spend: Record<string, number>; answer_rate: number | null }
   recent: VoiceCampaignListItem[]
   upcoming: VoiceCampaignListItem[]
-  callers: Record<string, number>
+  agents?: Record<string, number>
   audio_count: number
+  setup: {
+    default_country: 'IN' | 'AE' | 'US' | null
+    dlt_registered: boolean
+    consented: number
+    /** UAE while VOICE_UAE_ENABLED is off: why calls are "coming soon", and the rules that will apply. */
+    coming_soon?: string | null
+    market_rules?: string[]
+  }
 }
 
 export interface VoiceOptions {
   languages: Record<VoiceLanguage, string>
   legal_windows: Record<string, [string, string]>
   pricing: Record<string, { currency: string; per_minute: number }>
+  ai_pricing?: Record<string, { currency: string; per_minute: number }>
+  ai_expected_minutes?: number
+  number_kinds?: Record<'IN' | 'US', { key: CallerKind; label: string }[]>
   opt_out_digit: string
   max_bytes: number
   max_seconds: number

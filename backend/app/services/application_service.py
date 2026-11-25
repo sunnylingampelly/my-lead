@@ -14,6 +14,7 @@ from app.schemas.application import (
     MyApplicationOut,
 )
 from app.services import audit_service
+from app.services.billing import plans
 from app.services.notification_service import notify
 from app.services.regions import profile_for
 from app.services.tenancy import AppContext, OrgContext, effective_app_role
@@ -35,6 +36,8 @@ def _unique_slug(db: Session, organization_id: str, name: str, exclude_id: str |
 
 def create_application(db: Session, ctx: OrgContext, data: ApplicationCreate) -> Application:
     ctx.require(Perm.APPS_CREATE)
+    plans.check_limit(db, ctx.organization_id, "applications",
+                      plans.count_usage(db, ctx.organization_id, "applications"))
     app = Application(
         organization_id=ctx.organization_id, name=data.name, slug=_unique_slug(db, ctx.organization_id, data.name),
         description=data.description, color=data.color, timezone=data.timezone,
@@ -230,10 +233,15 @@ def compliance(db: Session, ctx: AppContext) -> dict:
                        f"{region.marketing_window_start}", "required": True,
                        "done": s.quiet_hours_start <= region.marketing_window_end
                        and s.quiet_hours_end >= region.marketing_window_start})
-    checks.append({"key": "dlt", "label": "DLT entity, headers and templates (SMS module)",
-                   "required": region.sms_requires_dlt, "done": False, "pending_module": "sms"})
-    checks.append({"key": "10dlc", "label": "A2P 10DLC brand and campaign registration (SMS module)",
-                   "required": region.sms_requires_10dlc, "done": False, "pending_module": "sms"})
+    from app.services.dashboard_service import sms_setup
+
+    sms = sms_setup(db, ctx.application_id, region.code)
+    checks.append({"key": "dlt", "label": "DLT entity, sender ID (header) and templates",
+                   "required": region.sms_requires_dlt, "done": sms["done"], "href": sms["href"],
+                   "detail": sms["detail"], "steps": sms["steps"]})
+    checks.append({"key": "10dlc", "label": "A2P 10DLC brand and campaign registration",
+                   "required": region.sms_requires_10dlc, "done": sms["done"], "href": sms["href"],
+                   "detail": sms["detail"], "steps": sms["steps"]})
     return {
         "region": region.code, "region_name": region.name, "currency": region.currency,
         "dial_code": region.dial_code, "marketing_window": [region.marketing_window_start, region.marketing_window_end],

@@ -15,7 +15,8 @@ test('super admin: overview, organizations, wallet credit, staff, support access
   test.setTimeout(120_000)
   const email = uniqueEmail('root')
   await registerAndVerify(page, 'Root Admin', email)
-  await createOrgAndApp(page, `Ops ${Date.now()}`, 'Ops App')
+  const opsOrg = `Ops ${Date.now()}`
+  await createOrgAndApp(page, opsOrg, 'Ops App')
 
   // Not an admin yet: the menu has no admin link and /admin redirects away.
   await page.getByTestId('profile-menu').click()
@@ -32,8 +33,8 @@ test('super admin: overview, organizations, wallet credit, staff, support access
   await shot(page, 'c1-admin')
 
   await page.getByRole('button', { name: 'Organizations' }).click()
-  await page.getByLabel('Search organizations').fill('Ops ')
-  await page.getByTestId('admin-org-row').first().click()
+  await page.getByLabel('Search organizations').fill(opsOrg)
+  await page.getByTestId('admin-org-row').filter({ hasText: opsOrg }).click()
   await page.getByRole('button', { name: 'Adjust wallet' }).click()
   const form = page.getByTestId('adjust-form')
   await form.getByLabel(/Amount/).fill('250')
@@ -55,7 +56,7 @@ test('super admin: overview, organizations, wallet credit, staff, support access
   await customer.close()
   await page.getByRole('button', { name: 'Organizations' }).click()
   await page.getByLabel('Search organizations').fill(customerOrg)
-  await page.getByTestId('admin-org-row').first().click()
+  await page.getByTestId('admin-org-row').filter({ hasText: customerOrg }).click()
   await page.getByRole('button', { name: 'Open read-only' }).click()
   await page.getByLabel('Reason (shown to the customer)').fill('Checking an import issue')
   await page.getByRole('dialog').getByRole('button', { name: 'Open read-only' }).last().click()

@@ -25,8 +25,8 @@ function wav(seconds: number) {
   return b
 }
 
-test('India voice: caller ID, audio library, campaign, outcomes, call log and press-9 opt-out', async ({ page, browser }) => {
-  test.setTimeout(150_000)
+test('India voice: managed numbers, audio library, campaign, outcomes, call log, press-9 opt-out and an AI agent', async ({ page, browser }) => {
+  test.setTimeout(240_000)
   const tag = String(Date.now()).slice(-5)
   await registerAndVerify(page, 'Vani Voice', uniqueEmail('voice'))
   await createOrgAndApp(page, 'Chai Calls', 'Chai Voice')
@@ -56,27 +56,20 @@ test('India voice: caller ID, audio library, campaign, outcomes, call log and pr
   await page.getByRole('button', { name: 'Save settings' }).click()
   await expect(page.getByRole('button', { name: 'Save settings' })).toBeDisabled()
 
-  // India requires a DLT entity registration.
-  await navTo(page, 'DLT & 10DLC')
+  // India requires a DLT entity registration (shared by voice; SMS itself is coming soon).
+  await page.goto(`/apps/${page.url().match(/\/apps\/([^/?#]+)/)![1]}/voice/registration`)
   await page.getByLabel('Principal Entity ID').fill('1101456789012345678')
   await page.getByRole('checkbox', { name: 'Confirm registration' }).check()
   await page.getByRole('button', { name: 'Save registration' }).click()
   await expect(page.getByTestId('registration-confirmed')).toBeVisible()
 
-  // Caller ID: a normal mobile is refused; a 160-series number is added and confirmed.
+  // Phone numbers are Signalcraft's job: nothing to get, choose or pay for, and no page for it.
   await navTo(page, 'Voice')
-  await expect(page.getByTestId('voice-setup')).toBeVisible()
-  await navTo(page, 'Caller IDs')
-  await page.getByRole('button', { name: 'Add caller ID' }).first().click()
-  await page.getByLabel('Number type').selectOption('series_160')
-  await page.getByLabel('Number', { exact: true }).fill('+919876543210')
-  await page.getByRole('dialog').getByRole('button', { name: 'Add caller ID' }).click()
-  await expect(page.getByRole('dialog')).toContainText('160-series number')
-  await page.getByLabel('Number', { exact: true }).fill('+911601234567')
-  await page.getByRole('dialog').getByRole('button', { name: 'Add caller ID' }).click()
-  await page.getByRole('button', { name: 'Confirm ownership' }).click()
-  await page.getByRole('alertdialog').getByRole('button', { name: 'I confirm' }).click()
-  await expect(page.getByText(/^Approved/)).toBeVisible()
+  await expect(page.getByTestId('voice-setup')).not.toContainText('phone number')
+  await expect(page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Phone numbers' })).toHaveCount(0)
+  const appId = page.url().match(/\/apps\/([^/?#]+)/)![1]
+  await page.goto(`/apps/${appId}/voice/numbers`)
+  await expect(page).toHaveURL(new RegExp(`/apps/${appId}/voice$`))
 
   // Audio library: upload a recording and write a text-to-speech message.
   await navTo(page, 'Audio library')
@@ -93,7 +86,7 @@ test('India voice: caller ID, audio library, campaign, outcomes, call log and pr
   // Campaign from the message.
   await page.getByRole('button', { name: 'Use' }).first().click()
   await page.getByRole('radio', { name: 'Transactional', exact: true }).click()
-  await expect(page.getByText('+911601234567')).toBeVisible()
+  await expect(page.getByTestId('managed-number-note')).toBeVisible()
   await page.getByRole('button', { name: /Next: Message/ }).click()
   await expect(page.getByTestId('script-preview')).toContainText('Namaste Asha, your Chai order has shipped')
   await expect(page.getByTestId('script-preview')).toContainText('To stop receiving these calls, press 9.')
@@ -121,4 +114,74 @@ test('India voice: caller ID, audio library, campaign, outcomes, call log and pr
   await log.goto('/dev/calls')
   await expect(log.getByTestId('call-log')).toContainText('Namaste Priya, your Chai order has shipped')
   await log.close()
+
+  // ---------------------------------------------------------------- AI agent
+  // Create from a template, test it in the browser (simulated without an API key), teach it a rule.
+  await navTo(page, 'AI agents')
+  await page.getByTestId('new-agent').click()
+  const na = page.getByRole('dialog')
+  await expect(na.getByRole('radio', { name: /Lead qualification/ })).toHaveAttribute('aria-checked', 'true')
+  await na.getByLabel('Agent name').fill('Maya')
+  await na.getByTestId('create-agent').click()
+  await expect(page.getByRole('heading', { name: 'Maya', exact: true })).toBeVisible()
+  await expect(page.getByTestId('agent-status')).toHaveText('Draft')
+  const chat = page.getByTestId('chat')
+  await expect(chat.getByTestId('chat-agent').first()).toContainText('this is Maya calling from')
+  await expect(page.getByTestId('simulated-badge')).toBeVisible()
+  await page.getByLabel('Your reply').fill('Hi, who is this?')
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(chat.getByTestId('chat-agent')).toHaveCount(2)
+  await expect(chat.getByTestId('chat-user')).toHaveText('Hi, who is this?')
+  await page.getByLabel('Your reply').fill("Yes, I'm interested. Call me back tomorrow.")
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(chat.getByTestId('chat-agent')).toHaveCount(3)
+  await page.getByTestId('evaluate').click()
+  await expect(page.getByTestId('evaluation')).toContainText('Simulated summary')
+  await expect(page.getByTestId('evaluation')).toContainText('Interest: Hot')
+  await expect(page.getByTestId('evaluation')).toContainText('Timeline')
+  await page.getByLabel('Add this as a rule').fill('Always offer a free tasting at our store.')
+  await page.getByTestId('add-rule-button').click()
+  await expect(page.getByLabel('Instructions')).toHaveValue(/- Always offer a free tasting at our store\.$/)
+  await page.getByTestId('save-agent').click()
+  await expect(page.getByTestId('save-agent')).toBeDisabled()
+  await page.getByRole('button', { name: 'Restart conversation' }).click()
+  await expect(chat.getByTestId('chat-agent')).toHaveCount(1)
+  await page.getByTestId('toggle-agent').click()
+  await expect(page.getByTestId('agent-status')).toHaveText('Active')
+
+  // A campaign where the AI agent holds the conversation.
+  await navTo(page, 'Calls')
+  await page.getByRole('button', { name: 'New voice campaign' }).first().click()
+  await expect(page.getByLabel('Campaign name')).toBeVisible()
+  await page.getByLabel('Campaign name').fill('Chai AI follow-up')
+  await page.getByRole('radio', { name: 'Transactional', exact: true }).click()
+  await expect(page.getByTestId('managed-number-note')).toBeVisible()
+  await page.getByRole('button', { name: /Next: Message/ }).click()
+  await page.getByTestId('message-type-ai_agent').click()
+  await page.getByRole('radio', { name: 'Maya' }).check()
+  await expect(page.getByTestId('ai-price')).toContainText('₹6.00 per started minute')
+  await expect(page.getByTestId('script-preview')).toContainText('this is Maya calling from')
+  await page.getByRole('button', { name: /Next: Audience/ }).click()
+  await page.getByText('All reachable contacts').click()
+  await page.getByRole('button', { name: /Next: Review/ }).click()
+  await expect(page.getByTestId('cost-estimate')).toContainText('AI rate')
+  await expect(page.getByTestId('launch')).toBeEnabled()
+  await page.getByTestId('launch').click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Start calling' }).click()
+
+  // The call log: open an AI call and read the transcript, summary and captured fields.
+  await expect(page.getByRole('heading', { name: 'Chai AI follow-up', level: 1 })).toBeVisible()
+  const aiCall = page.getByTestId('view-call').filter({ hasText: 'Simulated summary' }).first()
+  await expect(aiCall).toBeVisible({ timeout: 30_000 })
+  await aiCall.click()
+  const detail = page.getByTestId('call-detail')
+  await expect(detail.getByTestId('transcript')).toContainText('this is Maya calling from')
+  await expect(detail.getByTestId('call-summary')).toContainText('Simulated summary')
+  await expect(detail).toContainText('Captured')
+  await shot(page, 'v4-ai-call')
+  // The contact's CRM timeline has the AI call with a link back to it.
+  await detail.getByRole('link', { name: 'Open contact' }).click()
+  await page.getByRole('tab', { name: /CRM|Activity/ }).first().click()
+  await expect(page.getByTestId('timeline-ai-call').first()).toContainText('Simulated summary')
+  await expect(page.getByTestId('timeline-ai-call').first().getByRole('link', { name: 'View call' })).toBeVisible()
 })

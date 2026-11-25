@@ -38,6 +38,7 @@ from app.services import audit_service
 from app.services.audience import consent as consent_svc
 from app.services.audience.normalize import NormalizedContact, check_identity, identity_keys, normalize_contact
 from app.services.audience.query import apply_filters, apply_sort, base_query, count
+from app.services.billing import plans
 from app.services.regions import profile_for
 from app.services.tenancy import AppContext
 from app.utils.contact_normalize import InvalidValue, format_phone, identifier_hash
@@ -58,7 +59,7 @@ def attr_defs(db: Session, ctx: AppContext) -> dict[str, ContactAttributeDefinit
         ContactAttributeDefinition.application_id == ctx.application_id))}
 
 
-def to_list_item(c: Contact, ctx: AppContext) -> ContactListItem:
+def to_list_item(c: Contact, ctx: AppContext, owners: dict | None = None) -> ContactListItem:
     return ContactListItem(
         id=c.id, first_name=c.first_name, last_name=c.last_name, full_name=c.full_name, email=c.email, phone=c.phone,
         phone_display=format_phone(c.phone, ctx.application.default_country), phone_country=c.phone_country,
@@ -68,7 +69,19 @@ def to_list_item(c: Contact, ctx: AppContext) -> ContactListItem:
         sms_unsubscribed=c.sms_unsubscribed_at is not None, voice_unsubscribed=c.voice_unsubscribed_at is not None,
         tags=[TagOut.model_validate(t) for t in sorted(c.tags, key=lambda t: t.name.lower())],
         created_at=c.created_at, last_activity_at=c.last_activity_at,
+        company_id=c.company_id, owner_id=c.owner_id, lifecycle_stage=c.lifecycle_stage, lead_score=c.lead_score or 0,
+        owner_name=_owner_name(owners, c.owner_id),
     )
+
+
+def _owner_name(owners: dict | None, owner_id: str | None) -> str | None:
+    u = (owners or {}).get(owner_id) if owner_id else None
+    return (u.full_name or u.email) if u else None
+
+
+def _owners(db: Session, ids) -> dict:
+    ids = {i for i in ids if i}
+    return {u.id: u for u in db.scalars(select(User).where(User.id.in_(ids)))} if ids else {}
 
 
 def get_contact(db: Session, ctx: AppContext, contact_id: str) -> Contact:
@@ -85,7 +98,7 @@ def detail(db: Session, ctx: AppContext, contact_id: str) -> ContactDetail:
         ContactListMember, ContactListMember.list_id == ContactList.id).where(
         ContactListMember.contact_id == c.id).order_by(ContactList.name)).all()
     jur = c.phone_country or c.country
-    base = to_list_item(c, ctx).model_dump()
+    base = to_list_item(c, ctx, _owners(db, [c.owner_id])).model_dump()
     return ContactDetail(
         **base, phone_type=c.phone_type, postal_code=c.postal_code,
         timezone=c.timezone, source=c.source, attributes=c.attributes or {},
@@ -102,14 +115,16 @@ def list_contacts(db: Session, ctx: AppContext, filters: ContactFilters, params:
     stmt = apply_filters(db, ctx, base_query(ctx), filters)
     total = count(db, stmt)
     rows = db.scalars(apply_sort(stmt, sort).offset(params.offset).limit(params.page_size)).all()
-    return Page(items=[to_list_item(c, ctx) for c in rows], total=total, page=params.page,
+    owners = _owners(db, [c.owner_id for c in rows])
+    return Page(items=[to_list_item(c, ctx, owners) for c in rows], total=total, page=params.page,
                 page_size=params.page_size)
 
 
 # ------------------------------------------------------------------ write helpers
 
 def _normalize(db: Session, ctx: AppContext, data, defs) -> NormalizedContact:
-    raw = data.model_dump(exclude_unset=True, exclude={"tag_ids", "list_ids", "consent", "status", "phone_country"})
+    raw = data.model_dump(exclude_unset=True, exclude={"tag_ids", "list_ids", "consent", "status", "phone_country",
+                                                       "company_id", "owner_id", "lifecycle_stage", "clear_owner"})
     try:
         return normalize_contact(raw, default_country=ctx.application.default_country, attr_defs=defs,
                                  phone_country_hint=data.phone_country)
@@ -204,6 +219,7 @@ def add_to_lists(db: Session, ctx: AppContext, contact_ids: list[str], list_ids:
 
 def create_contact(db: Session, ctx: AppContext, data: ContactCreate, ip: str | None = None) -> Contact:
     ctx.require(Perm.AUDIENCE_WRITE)
+    plans.check_limit(db, ctx.organization_id, "contacts", plans.count_usage(db, ctx.organization_id, "contacts"))
     defs = attr_defs(db, ctx)
     n = _normalize(db, ctx, data, defs)
     rule = identity_rule(db, ctx)
@@ -218,10 +234,17 @@ def create_contact(db: Session, ctx: AppContext, data: ContactCreate, ip: str | 
                        details={"contact_id": dup.id})
     tag_ids = _validate_ids(db, ctx, Tag, data.tag_ids, "tags")
     list_ids = _validate_ids(db, ctx, ContactList, data.list_ids, "lists")
+    owner_id = _crm_owner(db, ctx, data.owner_id)
     c = Contact(organization_id=ctx.organization_id, application_id=ctx.application_id, created_by_id=ctx.user.id,
                 source=n.source or "manual", attributes={})
     apply_normalized(c, n, rule, only_provided=False)
     c.source = c.source or "manual"
+    _apply_company(db, ctx, c, data, company_changed=True, email_changed=bool(c.email))
+    if owner_id:
+        c.owner_id = owner_id
+    if data.lifecycle_stage:
+        _require_crm(ctx)
+        c.lifecycle_stage = data.lifecycle_stage
     db.add(c)
     try:
         db.flush()
@@ -236,7 +259,42 @@ def create_contact(db: Session, ctx: AppContext, data: ContactCreate, ip: str | 
     add_tags(db, ctx, [c.id], tag_ids)
     add_to_lists(db, ctx, [c.id], list_ids)
     consent_svc.record_activity(db, ctx, c.id, "created", "Contact created", {"source": c.source}, ctx.user.id)
+    from app.services.crm import leads as crm_leads
+
+    if owner_id:
+        crm_leads._assigned(db, c, by_user=ctx.user.id)
+    crm_leads.assign_contact_now(db, c)  # assignment rules + first-response SLA, right away
     return c
+
+
+def _require_crm(ctx: AppContext) -> None:
+    ctx.require(Perm.CRM_WRITE)
+
+
+def _crm_owner(db: Session, ctx: AppContext, owner_id: str | None) -> str | None:
+    if not owner_id:
+        return None
+    _require_crm(ctx)
+    from app.services.crm.common import check_owner
+
+    return check_owner(db, ctx, owner_id)
+
+
+def _apply_company(db: Session, ctx: AppContext, c: Contact, data, *, company_changed: bool,
+                   email_changed: bool) -> None:
+    """Link the contact to a CRM company: the one chosen, else by name or email domain."""
+    from app.models import Company
+    from app.services.crm.companies import relink_contact
+
+    if data.company_id:
+        co = db.scalar(select(Company).where(Company.id == data.company_id,
+                                             Company.application_id == ctx.application_id))
+        if co is None:
+            raise ValidationFailed("That company doesn't exist in this application", code="INVALID_REFERENCE")
+        c.company_id, c.company = co.id, co.name
+        return
+    if company_changed or email_changed:
+        relink_contact(db, c, company_changed=company_changed, email_changed=email_changed)
 
 
 def update_contact(db: Session, ctx: AppContext, contact_id: str, data: ContactUpdate) -> Contact:
@@ -256,8 +314,19 @@ def update_contact(db: Session, ctx: AppContext, contact_id: str, data: ContactU
     if dup:
         raise Conflict("Another contact already uses this email or phone", code="DUPLICATE_CONTACT",
                        details={"contact_id": dup.id})
-    old_email, old_phone = c.email, c.phone
+    old_email, old_phone, old_company = c.email, c.phone, c.company
+    owner_id = _crm_owner(db, ctx, data.owner_id) if data.owner_id and data.owner_id != c.owner_id else None
     apply_normalized(c, n, rule, only_provided=True)
+    _apply_company(db, ctx, c, data, company_changed="company" in n.provided and c.company != old_company,
+                   email_changed=c.email != old_email)
+    if owner_id or (data.clear_owner and c.owner_id) or (data.lifecycle_stage
+                                                         and data.lifecycle_stage != c.lifecycle_stage):
+        from app.services.crm import leads as crm_leads
+
+        if owner_id or data.clear_owner:
+            crm_leads.bulk_assign_owner(db, ctx, [c], owner_id)
+        if data.lifecycle_stage:
+            crm_leads.bulk_set_lifecycle(db, ctx, [c], data.lifecycle_stage)
     # A changed identifier is a different address; consent for the old one does not carry over.
     if c.email != old_email and c.email_consent:
         c.email_consent = False
@@ -318,6 +387,18 @@ def bulk(db: Session, ctx: AppContext, body: BulkAction) -> dict:
     affected = 0
     if body.action == "delete":
         affected = delete_contacts(db, ctx, ids)
+    elif body.action in ("assign_owner", "set_lifecycle"):
+        from app.services.crm import leads as crm_leads
+
+        if body.action == "set_lifecycle" and not body.lifecycle_stage:
+            raise ValidationFailed("Choose a lifecycle stage", code="LIFECYCLE_REQUIRED")
+        for i in range(0, len(ids), 1000):
+            batch = list(db.scalars(select(Contact).where(Contact.application_id == ctx.application_id,
+                                                          Contact.id.in_(ids[i:i + 1000]))))
+            if body.action == "assign_owner":
+                affected += crm_leads.bulk_assign_owner(db, ctx, batch, body.owner_id)
+            else:
+                affected += crm_leads.bulk_set_lifecycle(db, ctx, batch, body.lifecycle_stage)
     elif body.action in ("add_tag", "remove_tag"):
         tag = db.scalar(select(Tag).where(Tag.id == body.tag_id, Tag.application_id == ctx.application_id))
         if tag is None:

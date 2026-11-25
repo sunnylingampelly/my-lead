@@ -14,10 +14,22 @@ class ScriptStep:
 
 
 @dataclass(frozen=True)
+class AgentRelay:
+    """An AI-agent conversation (Twilio ConversationRelay): the provider speaks the greeting, streams the
+    person's speech to our WebSocket and speaks our replies."""
+    url: str  # wss://.../public/voice/agent/{call_id}/ws?token=...
+    greeting: str
+    language: str
+    voice: str | None = None
+    action_url: str | None = None  # where the provider goes when the conversation ends (hand-off)
+
+
+@dataclass(frozen=True)
 class CallScript:
     steps: tuple[ScriptStep, ...]
     gather_digit_url: str | None = None  # where the provider posts a keypress
     gather_prompt: ScriptStep | None = None
+    relay: AgentRelay | None = None  # set for AI-agent calls; steps are then unused
 
 
 @dataclass(frozen=True)

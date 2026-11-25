@@ -83,7 +83,6 @@ def upsert_campaign(db: Session, wf, node: dict):
         c.launched_at = c.launched_at or utcnow()
     else:
         c.category = d.get("category") or "promotional"
-        c.caller_ref = d.get("caller_ref") or None
         c.audio_id = d.get("audio_id") or None
         intro = d.get("intro_text")
         c.intro_text = intro if intro is not None else c.intro_text
@@ -97,11 +96,9 @@ def upsert_campaign(db: Session, wf, node: dict):
 def freeze(db: Session, wf, node: dict, c) -> None:
     """Snapshot provider-facing details at publish time (after validation passed)."""
     from app.providers.sms.factory import provider_for as sms_provider
-    from app.providers.voice.factory import provider_for as voice_provider
     from app.services.sms import rules as sms_rules
     from app.services.sms.registration import dlt_row
-    from app.services.voice import script
-    from app.services.voice.campaigns import audio_of, caller_of
+    from app.services.voice.campaigns import draft_snapshot
 
     if node["type"] == "send_email":
         from app.services.email.engine import provider_for
@@ -118,15 +115,15 @@ def freeze(db: Session, wf, node: dict, c) -> None:
             "sender_id": sender.sender_id, "country": sender.country, "kind": sender.kind, "provider": sender.provider,
             "dlt_header_id": sender.dlt_header_id, "dlt_template_id": t.dlt_template_id if t else None,
             "principal_entity_id": reg.principal_entity_id if reg else None,
-            "messaging_service_sid": reg.us_messaging_service_sid if reg else None,
         }
     else:
-        caller, audio = caller_of(db, c), audio_of(db, c)
-        c.snapshot = script.snapshot_message(audio, caller, c)
-        c.provider = voice_provider(caller.provider)[1]
+        from app.core.config import settings
         from app.services.voice import rules as voice_rules
 
-        c.currency = voice_rules.price_per_minute(caller.country)[1]
+        # No caller to freeze: each call picks a Signalcraft number (and so its provider) at dial time.
+        c.snapshot = draft_snapshot(db, c)
+        c.provider = "auto" if settings.COMMUNICATION_MODE == "live" else "simulation"
+        c.currency = voice_rules.price_per_minute((c.snapshot or {}).get("country") or None)[1]
     db.flush()
 
 
@@ -191,7 +188,6 @@ def send_sms(db: Session, campaign: SmsCampaign, contact: Contact) -> SendResult
 
 
 def voice_call(db: Session, campaign: VoiceCampaign, contact: Contact) -> SendResult:
-    from app.providers.voice.factory import provider_for
     from app.services.voice import engine
 
     snap = campaign.snapshot or {}
@@ -211,8 +207,7 @@ def voice_call(db: Session, campaign: VoiceCampaign, contact: Contact) -> SendRe
     else:
         call.status = "placing"
     app, _, quiet = _app_bits(db, campaign.application_id)
-    provider, pname = provider_for(snap.get("provider"))
-    engine._place_batch(db, campaign, app, quiet, [call], provider, pname)
+    engine._place_batch(db, campaign, app, quiet, [call])
     return _result(call.status, call.error_message or call.deferred_reason, call.next_attempt_at)
 
 

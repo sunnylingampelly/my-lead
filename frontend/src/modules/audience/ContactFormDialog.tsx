@@ -10,8 +10,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, Input, Select, Textarea } from '@/components/ui/form-controls'
 import { Checkbox, PhoneInput } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { ALL_COUNTRIES, INDIAN_STATES, US_STATES } from '@/lib/regions'
+import { ALL_COUNTRIES, EMIRATES, INDIAN_STATES, US_STATES } from '@/lib/regions'
 import type { Attribute, ContactDetail, ContactInput } from '@/types/audience'
+import type { Ref } from '@/types/crm'
+import { CompanyPicker, OwnerSelect } from '../crm/components'
+import { LIFECYCLE_LABEL, LIFECYCLES } from '../crm/format'
 
 interface Values {
   first_name: string
@@ -60,7 +63,9 @@ export function ContactFormDialog({
   contact?: ContactDetail
   onSaved?: (c: ContactDetail) => void
 }) {
-  const { app } = useWorkspace()
+  const { app, can } = useWorkspace()
+  const crmRead = can('crm.read')
+  const crmWrite = can('crm.write')
   const appId = app!.id
   const api = audienceApi(appId)
   const qc = useQueryClient()
@@ -73,6 +78,10 @@ export function ContactFormDialog({
   const [listIds, setListIds] = useState<string[]>([])
   const [consent, setConsent] = useState({ email: false, sms: false, voice: false, source: '', evidence: '', consent_reference: '' })
   const [error, setError] = useState<string | null>(null)
+  const [company, setCompany] = useState<Ref | null>(null)
+  const [companyTouched, setCompanyTouched] = useState(false)
+  const [owner, setOwner] = useState('')
+  const [lifecycle, setLifecycle] = useState('lead')
   const { register, handleSubmit, reset, watch, formState } = useForm<Values>()
   const country = watch('country')
 
@@ -83,6 +92,10 @@ export function ContactFormDialog({
     setListIds([])
     setConsent({ email: false, sms: false, voice: false, source: '', evidence: '', consent_reference: '' })
     setPhoneCountry(contact?.phone_country ?? defaultCountry)
+    setCompany(contact?.company_id && contact.company ? { id: contact.company_id, name: contact.company } : null)
+    setCompanyTouched(false)
+    setOwner(contact?.owner_id ?? '')
+    setLifecycle(contact?.lifecycle_stage ?? 'lead')
     reset({
       first_name: contact?.first_name ?? '',
       last_name: contact?.last_name ?? '',
@@ -119,12 +132,32 @@ export function ContactFormDialog({
       email: v.email || null,
       phone: v.phone || null,
       phone_country: phoneCountry,
-      company: v.company || null,
       country: v.country || null,
       state: v.state || null,
       city: v.city || null,
       postal_code: v.postal_code || null,
       attributes,
+    }
+    if (crmRead) {
+      // The company comes from the CRM picker: a chosen company links the contact to it.
+      if (!contact || companyTouched) {
+        body.company = company?.name ?? null
+        body.company_id = company?.id ?? null
+      }
+    } else {
+      body.company = v.company || null
+    }
+    if (crmWrite) {
+      if (!contact) {
+        if (owner) body.owner_id = owner
+        body.lifecycle_stage = lifecycle
+      } else {
+        if (owner !== (contact.owner_id ?? '')) {
+          if (owner) body.owner_id = owner
+          else body.clear_owner = true
+        }
+        if (lifecycle !== (contact.lifecycle_stage ?? 'lead')) body.lifecycle_stage = lifecycle
+      }
     }
     try {
       let saved: ContactDetail
@@ -173,9 +206,27 @@ export function ContactFormDialog({
             <Field label="Phone" htmlFor="c-phone">
               <PhoneInput id="c-phone" country={phoneCountry} onCountry={setPhoneCountry} {...register('phone')} />
             </Field>
-            <Field label="Company" htmlFor="c-company">
-              <Input id="c-company" {...register('company')} />
-            </Field>
+            {crmRead ? (
+              <Field
+                label="Company"
+                htmlFor="c-company"
+                hint={contact?.company && !contact.company_id && !companyTouched ? `Currently “${contact.company}” (not linked to a CRM company)` : 'Pick a company or type a new name to create it.'}
+              >
+                <CompanyPicker
+                  appId={appId}
+                  id="c-company"
+                  value={company}
+                  onChange={(v) => {
+                    setCompany(v)
+                    setCompanyTouched(true)
+                  }}
+                />
+              </Field>
+            ) : (
+              <Field label="Company" htmlFor="c-company">
+                <Input id="c-company" {...register('company')} />
+              </Field>
+            )}
             <Field label="Country" htmlFor="c-country">
               <Select id="c-country" {...register('country')}>
                 <option value="">—</option>
@@ -186,8 +237,8 @@ export function ContactFormDialog({
                 ))}
               </Select>
             </Field>
-            <Field label={country === 'US' ? 'State' : 'State / UT'} htmlFor="c-state">
-              {country === 'US' || country === 'IN' ? (
+            <Field label={country === 'US' ? 'State' : country === 'AE' ? 'Emirate' : 'State / UT'} htmlFor="c-state">
+              {country === 'US' || country === 'IN' || country === 'AE' ? (
                 <Select id="c-state" {...register('state')}>
                   <option value="">—</option>
                   {country === 'US'
@@ -196,7 +247,7 @@ export function ContactFormDialog({
                           {name}
                         </option>
                       ))
-                    : INDIAN_STATES.map((s) => <option key={s}>{s}</option>)}
+                    : (country === 'AE' ? EMIRATES : INDIAN_STATES).map((s) => <option key={s}>{s}</option>)}
                 </Select>
               ) : (
                 <Input id="c-state" {...register('state')} />
@@ -208,6 +259,22 @@ export function ContactFormDialog({
             <Field label={country === 'US' ? 'ZIP code' : country === 'IN' ? 'PIN code' : 'Postal code'} htmlFor="c-postal">
               <Input id="c-postal" {...register('postal_code')} />
             </Field>
+            {crmWrite && (
+              <>
+                <Field label="Owner" htmlFor="c-owner" hint={contact ? undefined : 'Leave unassigned to let assignment rules pick an owner.'}>
+                  <OwnerSelect appId={appId} id="c-owner" value={owner} onChange={setOwner} />
+                </Field>
+                <Field label="Lifecycle stage" htmlFor="c-lifecycle">
+                  <Select id="c-lifecycle" value={lifecycle} onChange={(e) => setLifecycle(e.target.value)}>
+                    {LIFECYCLES.map((l) => (
+                      <option key={l} value={l}>
+                        {LIFECYCLE_LABEL[l]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </>
+            )}
           </div>
 
           {!!attrs.data?.length && (
@@ -266,7 +333,7 @@ export function ContactFormDialog({
                 {(['email', 'sms', 'voice'] as const).map((ch) => (
                   <label key={ch} className="flex items-center gap-2 text-sm">
                     <Checkbox checked={consent[ch]} onChange={(e) => setConsent((c) => ({ ...c, [ch]: e.target.checked }))} />
-                    {ch === 'email' ? 'Email' : ch === 'sms' ? 'SMS' : 'Voice calls'}
+                    {ch === 'email' ? 'Email marketing consent' : ch === 'sms' ? 'SMS marketing consent' : 'Voice marketing consent'}
                   </label>
                 ))}
               </div>

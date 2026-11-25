@@ -18,6 +18,7 @@ import { Pagination } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn, formatDateTime, timeAgo } from '@/lib/utils'
+import { RecipientActions } from './recipientActions'
 import { CampaignStatusBadge, pct } from './components'
 
 const SERIES = { opens: 'hsl(var(--primary))', clicks: '#0d9488' }
@@ -43,6 +44,7 @@ const MSG_FILTERS = [
   ['', 'All'],
   ['delivered', 'Delivered'],
   ['opened', 'Opened'],
+  ['not_opened', 'Didn’t open'],
   ['clicked', 'Clicked'],
   ['bounced', 'Bounced'],
   ['complained', 'Complaints'],
@@ -63,7 +65,7 @@ const MSG_BADGE: Record<string, 'success' | 'warning' | 'destructive' | 'seconda
   skipped: 'warning',
 }
 
-function Recipients({ campaignId }: { campaignId: string }) {
+function Recipients({ campaignId, campaignName }: { campaignId: string; campaignName: string }) {
   const { app } = useWorkspace()
   const [status, setStatus] = useState('')
   const [search, setSearch] = useState('')
@@ -74,17 +76,20 @@ function Recipients({ campaignId }: { campaignId: string }) {
     <Card>
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Recipients</CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <RecipientActions channel="email" campaignId={campaignId} campaignName={campaignName} status={status} tabLabel={MSG_FILTERS.find(([k]) => k === status)?.[1] ?? 'All'} count={q.data?.total ?? 0} />
+        </div>
         <div className="relative sm:w-64">
           <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
           <Input className="pl-8" placeholder="Find an email address" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} aria-label="Search recipients" />
         </div>
       </CardHeader>
-      <div className="flex flex-wrap gap-1 border-y px-4 py-2">
+      <div className="flex gap-1 overflow-x-auto border-y px-4 py-2">
         {MSG_FILTERS.map(([k, label]) => (
           <button
             key={k}
             onClick={() => { setStatus(k); setPage(1) }}
-            className={cn('rounded-full px-3 py-1 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
+            className={cn('shrink-0 rounded-full px-3 py-1 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
           >
             {label}
           </button>
@@ -238,6 +243,13 @@ export function CampaignReportPage() {
                 <Copy /> Duplicate
               </Button>
             )}
+            {camp.status === 'completed' && can('automation.write') && (
+              <Button variant="outline" asChild>
+                <Link to={`/apps/${app!.id}/automation/new?trigger=contact_created&channel=email&from_campaign=${camp.id}`} data-testid="use-in-automation">
+                  Use in automation
+                </Link>
+              </Button>
+            )}
             {camp.status === 'draft' && can('campaigns.write') && (
               <Button variant="ghost" size="icon" aria-label="Delete draft" onClick={() => setConfirm('delete')}>
                 <Trash2 />
@@ -303,7 +315,7 @@ export function CampaignReportPage() {
             </div>
           )}
 
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle>Engagement over time</CardTitle>
@@ -313,7 +325,7 @@ export function CampaignReportPage() {
                 {!rep.data?.timeline.points.length ? (
                   <p className="py-16 text-center text-sm text-muted-foreground">No opens or clicks yet.</p>
                 ) : (
-                  <div className="h-64" role="img" aria-label="Opens and clicks over time">
+                  <div className="h-64 overflow-hidden" role="img" aria-label="Opens and clicks over time">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={rep.data.timeline.points} margin={{ top: 4, right: 12, left: -12, bottom: 0 }}>
                         <CartesianGrid vertical={false} stroke="hsl(var(--border))" />
@@ -369,7 +381,7 @@ export function CampaignReportPage() {
             </Card>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <Card className="lg:col-span-2">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -429,7 +441,7 @@ export function CampaignReportPage() {
             </Card>
           </div>
 
-          <Recipients campaignId={camp.id} />
+          <Recipients campaignName={camp.name} campaignId={camp.id} />
         </div>
       )}
 

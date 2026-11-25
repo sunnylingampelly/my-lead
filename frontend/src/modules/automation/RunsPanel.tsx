@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, Circle, Clock, StopCircle, Users, XCircle } from 'lucide-react'
+import { CheckCircle2, Circle, Clock, ExternalLink, Search, StopCircle, UserPlus, Users, XCircle } from 'lucide-react'
 import { automationApi, type WorkflowRun, type WorkflowStatus, useWorkflowRuns, wqk } from '@/api/automation'
 import { errorMessage } from '@/api/client'
 import { EmptyState, LoadingRows } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/form-controls'
 import { Badge } from '@/components/ui/misc'
 import { Sheet } from '@/components/ui/sheet'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
@@ -67,9 +68,19 @@ function RunDetail({ workflowId, run, onClose, canStop }: { workflowId: string; 
                   <li key={i} className="relative">
                     <Icon className={cn('absolute -left-[27px] top-0.5 size-4 bg-card', s.outcome === 'failed' ? 'text-destructive' : s.outcome === 'waiting' ? 'text-primary' : 'text-success-strong')} />
                     <div className="font-medium">{s.label}</div>
+                    {s.summary && s.summary !== s.label && <div className="text-xs">{s.summary}</div>}
                     <div className="text-xs text-muted-foreground">
                       {s.detail ?? s.outcome.replace('_', ' ')} · {formatDateTime(s.at)}
                     </div>
+                    {s.links?.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-3 text-xs">
+                        {s.links.map((l) => (
+                          <Link key={l.id} className="inline-flex items-center gap-1 font-medium text-primary hover:underline" to={l.kind === 'deal' ? `/apps/${app!.id}/crm/deals/${l.id}` : `/apps/${app!.id}/crm/tasks?task=${l.id}`}>
+                            {l.label} <ExternalLink className="size-3" />
+                          </Link>
+                        ))}
+                      </div>
+                    )}
                   </li>
                 )
               })}
@@ -107,34 +118,55 @@ const FILTERS = [
   ['failed', 'Failed'],
 ] as const
 
-export function RunsPanel({ workflowId, canStop }: { workflowId: string; canStop: boolean }) {
+export function RunsPanel({ workflowId, canStop, onEnroll }: { workflowId: string; canStop: boolean; onEnroll?: () => void }) {
   const { app } = useWorkspace()
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [open, setOpen] = useState<WorkflowRun | null>(null)
-  const q = useWorkflowRuns(app!.id, workflowId, { page, page_size: 25, status: status || undefined })
+  const [search, setSearch] = useState('')
+  const [debounced, setDebounced] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebounced(search.trim())
+      setPage(1)
+    }, 300)
+    return () => clearTimeout(t)
+  }, [search])
+  const q = useWorkflowRuns(app!.id, workflowId, { page, page_size: 25, status: status || undefined, search: debounced || undefined })
   return (
     <Card className="mx-auto max-w-5xl">
-      <div className="flex flex-wrap gap-1 border-b p-3">
-        {FILTERS.map(([k, label]) => (
-          <button key={k} onClick={() => { setStatus(k); setPage(1) }} className={cn('rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}>
-            {label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2 border-b p-3">
+        <div className="flex flex-wrap gap-1">
+          {FILTERS.map(([k, label]) => (
+            <button key={k} onClick={() => { setStatus(k); setPage(1) }} className={cn('rounded-full px-3 py-1.5 text-xs font-medium transition', status === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="relative ml-auto w-full sm:w-60">
+          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Input className="pl-8" placeholder="Search name or email" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search enrollments" />
+        </div>
+        {onEnroll && (
+          <Button size="sm" variant="outline" onClick={onEnroll}>
+            <UserPlus /> Enroll contacts
+          </Button>
+        )}
       </div>
       {q.isLoading ? (
         <LoadingRows />
       ) : !q.data?.items.length ? (
-        <EmptyState icon={Users} title="No one has entered yet" description="People appear here as soon as they meet the trigger of an active workflow." />
+        <EmptyState icon={Users} title={debounced || status ? 'No enrollments match' : 'No one has entered yet'} description="People appear here as soon as they meet the trigger of an active workflow, or when you enroll them." />
       ) : (
         <>
+          <div className="overflow-x-auto">
           <Table>
             <THead>
               <TR>
                 <TH>Contact</TH>
                 <TH>Status</TH>
                 <TH>Current step</TH>
-                <TH>Next action</TH>
+                <TH>Next action / exit reason</TH>
                 <TH>Entered</TH>
               </TR>
             </THead>
@@ -152,6 +184,7 @@ export function RunsPanel({ workflowId, canStop }: { workflowId: string; canStop
               ))}
             </TBody>
           </Table>
+          </div>
           <Pagination page={page} pageSize={25} total={q.data.total} onPage={setPage} />
         </>
       )}

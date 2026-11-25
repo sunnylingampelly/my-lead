@@ -1,7 +1,7 @@
 """Audience: contacts, regional rules (India/US), consent, suppression, segments, lists, tags, export."""
 import pytest
 
-from tests.conftest import Api, invite_and_join
+from tests.conftest import Api, invite_and_join, make_pro
 
 
 @pytest.fixture
@@ -119,6 +119,7 @@ def test_custom_fields_typed_and_date_formats(india, owner):
     assert a.post(f"{base}/audience/attributes", json={"key": "email", "label": "x", "data_type": "text"}
                   ).status_code == 422
     # A US app reads the same slash date month-first.
+    make_pro(owner.org["id"])  # a third application
     us = owner.post("/applications", json={"organization_id": owner.org["id"], "name": "US App",
                                            "default_country": "US", "timezone": "America/New_York"}).json()
     ub = f"/apps/{us['id']}"
@@ -263,6 +264,7 @@ def test_compliance_profiles(india, owner):
     assert any("DLT" in r["name"] for r in comp["regulations"])
     s = owner.get(f"/applications/{india.in_app['id']}/settings").json()
     assert (s["quiet_hours_start"], s["quiet_hours_end"]) == ("21:00", "09:00")
+    make_pro(owner.org["id"])  # a third application
     us = owner.post("/applications", json={"organization_id": owner.org["id"], "name": "US Shop",
                                            "default_country": "US"}).json()
     comp = owner.get(f"/applications/{us['id']}/compliance").json()
@@ -278,7 +280,8 @@ def test_audience_isolation_between_apps_and_orgs(india):
     a, base = india, india.base
     c = contact(a, base, email="secret@example.com")
     tag = a.post(f"{base}/tags", json={"name": "Private"}).json()
-    other_app = a.post("/applications", json={"organization_id": a.org["id"], "name": "Other"}).json()
+    make_pro(a.org["id"])  # a third application
+    other_app =a.post("/applications", json={"organization_id": a.org["id"], "name": "Other"}).json()
     ob = f"/apps/{other_app['id']}"
     assert a.get(f"{ob}/contacts").json()["total"] == 0
     assert a.get(f"{ob}/contacts/{c['id']}").status_code == 404

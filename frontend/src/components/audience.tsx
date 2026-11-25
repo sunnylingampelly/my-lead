@@ -58,7 +58,7 @@ export function Checkbox({ className, ...props }: React.InputHTMLAttributes<HTML
   )
 }
 
-/** Country code picker + number. India and the US first. The server parses and validates to E.164. */
+/** Country code picker + number. India, the UAE and the US first. The server parses and validates to E.164. */
 export function PhoneInput({
   country,
   onCountry,
@@ -83,7 +83,7 @@ export function PhoneInput({
           ))}
         </optgroup>
       </Select>
-      <Input id={id} type="tel" inputMode="tel" placeholder={country === 'IN' ? '98765 43210' : '(415) 555-2671'} {...props} />
+      <Input id={id} type="tel" inputMode="tel" placeholder={country === 'IN' ? '98765 43210' : country === 'AE' ? '50 123 4567' : '(415) 555-2671'} {...props} />
     </div>
   )
 }

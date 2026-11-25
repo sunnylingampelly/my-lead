@@ -42,11 +42,13 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { analyseSms, toDltPattern } from '@/lib/smsEncoding'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
-import type { SenderKind, SmsCampaignListItem, SmsCategory, SmsCountry, SmsSender, SmsTemplate } from '@/types/sms'
+import type { SenderKind, SmsCampaignListItem, SmsCategory, SmsCountry, SmsInboundItem, SmsSender, SmsTemplate } from '@/types/sms'
+import { crmApi } from '@/api/crm'
 import { CampaignStatusBadge, pct } from '../email/components'
 import { SmsComposer } from './components'
 import { CATEGORY_LABEL, COUNTRY_FLAG, formatMoney, KIND_LABEL } from './format'
 import { NewSmsCampaignButton } from './SmsCampaignEditorPage'
+import { BackToCampaignBanner, SetupChecklist, WhatIsThis, type SetupItem } from '../email/campaignKit'
 
 function useCrumbs(label: string) {
   const { app, org } = useWorkspace()
@@ -69,8 +71,27 @@ export function SmsOverviewPage() {
   const f = (n: number) => formatCount(n, app!.default_country)
   const base = `/apps/${app!.id}/sms`
   const country = app!.default_country
-  const noActive = senders.data && !senders.data.some((s) => s.status === 'active')
-  const regMissing = q.data && ((country === 'IN' && !q.data.registration.india) || (country === 'US' && !q.data.registration.us))
+  const [other, setOther] = useState(false)
+  const markets: ('IN' | 'US')[] = country === 'US' ? ['US'] : country === 'IN' ? ['IN'] : ['IN', 'US']
+  if (other) markets.push(markets[0] === 'IN' ? 'US' : 'IN')
+  const activeIn = (c: string) => !!senders.data?.some((s) => s.status === 'active' && s.country === c)
+  const setupItems: SetupItem[] =
+    q.data && senders.data
+      ? markets.flatMap((m): SetupItem[] =>
+          m === 'IN'
+            ? [
+                { key: 'in-reg', label: 'Add your DLT entity registration (PE ID)', done: q.data!.registration.india, to: `${base}/registration`, term: 'pe_id' },
+                { key: 'in-sender', label: 'Add and confirm a DLT header (sender ID)', done: activeIn('IN'), to: `${base}/senders`, term: 'dlt_header' },
+                { key: 'in-template', label: 'Add a DLT content template', done: q.data!.setup.dlt_templates > 0, to: `${base}/templates`, term: 'dlt_template' },
+                { key: 'in-consent', label: 'Contacts with SMS consent (India)', done: q.data!.setup.consented.IN > 0, to: `/apps/${app!.id}/audience/import`, term: 'consent' },
+              ]
+            : [
+                { key: 'us-reg', label: 'Register your 10DLC brand and campaign', done: q.data!.registration.us, to: `${base}/registration`, term: 'tendlc' },
+                { key: 'us-sender', label: 'Add and confirm a US number', done: activeIn('US'), to: `${base}/senders` },
+                { key: 'us-consent', label: 'Contacts with SMS consent (TCPA, US)', done: q.data!.setup.consented.US > 0, to: `/apps/${app!.id}/audience/import`, term: 'tcpa' },
+              ],
+        )
+      : []
   const spend = q.data ? Object.entries(q.data.last_30_days.spend) : []
   return (
     <>
@@ -80,27 +101,18 @@ export function SmsOverviewPage() {
         description="Text message performance over the last 30 days, from carrier delivery receipts."
         actions={can('campaigns.write') && <NewSmsCampaignButton />}
       />
-      {can('settings.write') && (noActive || regMissing) && (
-        <div className="mb-6 rounded-lg border border-warning-border bg-warning-soft p-4 text-sm text-warning-strong" data-testid="sms-setup">
-          <div className="mb-3 flex items-center gap-2 font-semibold">
-            <TriangleAlert className="size-4" /> Finish SMS setup before your first campaign
-          </div>
-          <ol className="grid gap-2 md:grid-cols-2">
-            <li className="flex items-center gap-2">
-              {regMissing ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4 text-success-strong" />}
-              <Link className="underline" to={`${base}/registration`}>
-                {country === 'US' ? 'Register your 10DLC brand and campaign' : 'Add your DLT entity registration'}
-              </Link>
-            </li>
-            <li className="flex items-center gap-2">
-              {noActive ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4 text-success-strong" />}
-              <Link className="underline" to={`${base}/senders`}>
-                Add and confirm a sender ID
-              </Link>
-            </li>
-          </ol>
-        </div>
-      )}
+      <SetupChecklist
+        testId="sms-setup"
+        title="Finish SMS setup before your first campaign"
+        items={setupItems}
+        extra={
+          country && !other ? (
+            <button className="mt-3 text-xs font-medium underline" onClick={() => setOther(true)}>
+              Also sending to {country === 'IN' ? 'the United States' : 'India'}?
+            </button>
+          ) : null
+        }
+      />
       {q.isLoading ? (
         <Skeleton className="h-64 w-full" />
       ) : q.isError ? (
@@ -115,9 +127,9 @@ export function SmsOverviewPage() {
               <StatCard label="Spend" value={spend.length ? spend.map(([cur, v]) => formatMoney(v, cur)).join(' + ') : '—'} icon={CircleDollarSign} hint="Parts × per-part price" />
               <StatCard label="Opt-outs" value={f(q.data.last_30_days.opt_outs)} icon={UserMinus} hint="STOP replies received" />
             </div>
-            <div className="grid gap-6 lg:grid-cols-3">
-              <Card className="lg:col-span-2">
-                <CardHeader className="flex-row items-center justify-between">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <Card className="min-w-0 lg:col-span-2">
+                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle>Recent campaigns</CardTitle>
                   <Button variant="link" size="sm" asChild>
                     <Link to={`${base}/campaigns`}>All campaigns</Link>
@@ -377,7 +389,20 @@ export function SmsCampaignsPage() {
 
 // ------------------------------------------------------------------ templates
 
-function TemplateDialog({ open, onOpenChange, template }: { open: boolean; onOpenChange: (o: boolean) => void; template: SmsTemplate | null }) {
+/** Create or edit an SMS template; also used inline by the campaign editor. */
+export function TemplateDialog({
+  open,
+  onOpenChange,
+  template,
+  onSaved,
+  initial,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  template: SmsTemplate | null
+  onSaved?: (t: SmsTemplate) => void
+  initial?: { category?: SmsCategory; body?: string; sender_ref?: string | null }
+}) {
   const { app } = useWorkspace()
   const qc = useQueryClient()
   const senders = useSmsSenders(app!.id)
@@ -387,12 +412,13 @@ function TemplateDialog({ open, onOpenChange, template }: { open: boolean; onOpe
     if (open)
       setForm({
         name: template?.name ?? '',
-        category: template?.category ?? 'promotional',
-        body: template?.body ?? '',
-        sender_ref: template?.sender_ref ?? '',
+        category: template?.category ?? initial?.category ?? 'promotional',
+        body: template?.body ?? initial?.body ?? '',
+        sender_ref: template?.sender_ref ?? initial?.sender_ref ?? '',
         dlt_template_id: template?.dlt_template_id ?? '',
         dlt_template_text: template?.dlt_template_text ?? '',
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, template])
   const sender = senders.data?.find((s) => s.id === form.sender_ref)
   const india = sender?.country === 'IN' || (!sender && app!.default_country === 'IN')
@@ -401,10 +427,10 @@ function TemplateDialog({ open, onOpenChange, template }: { open: boolean; onOpe
     setBusy(true)
     const body = { ...form, sender_ref: form.sender_ref || null, dlt_template_id: form.dlt_template_id.trim() || null, dlt_template_text: form.dlt_template_text.trim() || null }
     try {
-      if (template) await smsApi(app!.id).updateTemplate(template.id, body)
-      else await smsApi(app!.id).createTemplate(body)
+      const out = template ? await smsApi(app!.id).updateTemplate(template.id, body) : await smsApi(app!.id).createTemplate(body)
       await qc.invalidateQueries({ queryKey: sqk.templates(app!.id) })
       toast.success(template ? 'Template saved' : 'Template created')
+      onSaved?.(out)
       onOpenChange(false)
     } catch (e) {
       toast.error(errorMessage(e))
@@ -452,10 +478,10 @@ function TemplateDialog({ open, onOpenChange, template }: { open: boolean; onOpe
               <div className="flex items-center gap-2 text-sm font-medium">
                 <FileCheck2 className="size-4" /> DLT registration (India)
               </div>
-              <Field label="DLT template ID" htmlFor="t-dltid" hint="19 digits, from your DLT portal (Jio, Airtel, Vi, BSNL…)">
+              <Field label="DLT template ID" htmlFor="t-dltid" hint="19 digits, from your DLT portal (Jio, Airtel, Vi, BSNL…)" action={<WhatIsThis term="dlt_template" />}>
                 <Input id="t-dltid" inputMode="numeric" value={form.dlt_template_id} onChange={(e) => setForm({ ...form, dlt_template_id: e.target.value })} placeholder="1107160000000012345" />
               </Field>
-              <Field label="Registered text" htmlFor="t-dlttext" hint="Paste the approved text exactly, with {#var#} where fields go.">
+              <Field label="Registered text" htmlFor="t-dlttext" hint="Paste the approved text exactly, with {#var#} where fields go." action={<WhatIsThis term="dlt_var" />}>
                 <Textarea id="t-dlttext" rows={3} value={form.dlt_template_text} onChange={(e) => setForm({ ...form, dlt_template_text: e.target.value })} className="font-mono text-xs" />
               </Field>
               {match !== null && (
@@ -492,6 +518,7 @@ export function SmsTemplatesPage() {
   const senderName = (id: string | null) => senders.data?.find((s) => s.id === id)?.sender_id
   return (
     <>
+      <BackToCampaignBanner />
       <PageHeader
         breadcrumbs={useCrumbs('Templates')}
         title="SMS templates"
@@ -613,7 +640,7 @@ export function SmsTemplatesPage() {
 
 // ------------------------------------------------------------------ senders
 
-const KINDS: Record<SmsCountry, SenderKind[]> = { IN: ['promotional', 'transactional', 'service'], US: ['long_code', 'toll_free', 'short_code'] }
+const KINDS: Record<SmsCountry, SenderKind[]> = { IN: ['promotional', 'transactional', 'service'], AE: ['promotional', 'transactional', 'service'], US: ['long_code', 'toll_free', 'short_code'] }
 const PLACEHOLDER: Record<SenderKind, string> = {
   promotional: '561234',
   transactional: 'ACMEIN',
@@ -623,15 +650,26 @@ const PLACEHOLDER: Record<SenderKind, string> = {
   short_code: '55555',
 }
 
-function AddSenderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+/** Add a sender ID; also used inline by the campaign editor (with the kind the campaign needs). */
+export function AddSenderDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  defaultKind,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  onCreated?: (s: SmsSender) => void
+  defaultKind?: SenderKind
+}) {
   const { app } = useWorkspace()
   const qc = useQueryClient()
   const initialCountry: SmsCountry = app!.default_country === 'US' ? 'US' : 'IN'
   const [country, setCountry] = useState<SmsCountry>(initialCountry)
-  const [kind, setKind] = useState<SenderKind>(KINDS[initialCountry][0]!)
+  const [kind, setKind] = useState<SenderKind>(defaultKind && KINDS[initialCountry].includes(defaultKind) ? defaultKind : KINDS[initialCountry][0]!)
   const [senderId, setSenderId] = useState('')
   const [headerId, setHeaderId] = useState('')
-  const [provider, setProvider] = useState<'simulation' | 'msg91' | 'twilio'>('simulation')
+  const [provider, setProvider] = useState<'simulation' | 'sns'>('simulation')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -677,6 +715,7 @@ function AddSenderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
           </Field>
           <Field
             label={country === 'IN' ? 'Header' : 'Number'}
+            action={country === 'IN' ? <WhatIsThis term="dlt_header" /> : undefined}
             htmlFor="s-id"
             error={error ?? undefined}
             hint={country === 'IN' ? (kind === 'promotional' ? 'Promotional headers are 6 digits.' : 'Service and transactional headers are 6 letters.') : kind === 'short_code' ? '5 or 6 digits.' : 'E.164 format, starting +1.'}
@@ -684,15 +723,14 @@ function AddSenderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
             <Input id="s-id" value={senderId} onChange={(e) => setSenderId(e.target.value.trim())} placeholder={PLACEHOLDER[kind]} className="font-mono" />
           </Field>
           {country === 'IN' && (
-            <Field label="DLT header ID (optional)" htmlFor="s-hid">
+            <Field label="DLT header ID (optional)" htmlFor="s-hid" hint="The numeric ID your DLT portal shows next to the approved header.">
               <Input id="s-hid" value={headerId} onChange={(e) => setHeaderId(e.target.value)} inputMode="numeric" />
             </Field>
           )}
           <Field label="Provider" htmlFor="s-prov" hint="Simulation never contacts a carrier. Live providers are used only after the platform is switched to live mode.">
             <Select id="s-prov" value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
               <option value="simulation">Simulation</option>
-              {country === 'IN' && <option value="msg91">MSG91</option>}
-              <option value="twilio">Twilio</option>
+              <option value="sns">Amazon SNS</option>
             </Select>
           </Field>
         </div>
@@ -707,9 +745,10 @@ function AddSenderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
               setBusy(true)
               setError(null)
               try {
-                await smsApi(app!.id).createSender({ sender_id: senderId, country, kind, provider, dlt_header_id: headerId || null })
+                const s = await smsApi(app!.id).createSender({ sender_id: senderId, country, kind, provider, dlt_header_id: headerId || null })
                 await qc.invalidateQueries({ queryKey: sqk.all(app!.id) })
                 toast.success('Sender ID added. Confirm it to start using it.')
+                onCreated?.(s)
                 onOpenChange(false)
               } catch (e) {
                 setError(errorMessage(e))
@@ -751,6 +790,7 @@ export function SmsSendersPage() {
   }
   return (
     <>
+      <BackToCampaignBanner />
       <PageHeader
         breadcrumbs={useCrumbs('Sender IDs')}
         title="Sender IDs"
@@ -796,7 +836,7 @@ export function SmsSendersPage() {
                     </div>
                   </TD>
                   <TD className="text-sm text-muted-foreground">{KIND_LABEL[s.kind]}</TD>
-                  <TD className="text-sm capitalize">{s.provider === 'msg91' ? 'MSG91' : s.provider}</TD>
+                  <TD className="text-sm capitalize">{s.provider === 'sns' ? 'Amazon SNS' : s.provider}</TD>
                   <TD>
                     {s.status === 'active' ? (
                       <Badge variant="success">Approved {s.attested_at && `· ${formatDate(s.attested_at)}`}</Badge>
@@ -861,12 +901,18 @@ export function SmsSendersPage() {
 
 // ------------------------------------------------------------------ registration
 
-export function SmsRegistrationPage() {
-  const { app, can } = useWorkspace()
+/** DLT (India) and 10DLC (US) registration. The same DLT registration covers SMS and voice; Voice opens it too. */
+export function SmsRegistrationPage({ channel = 'sms' }: { channel?: 'sms' | 'voice' }) {
+  const { app, can, org } = useWorkspace()
+  const country = app!.default_country
+  const [showOther, setShowOther] = useState(false)
+  const showIndia = channel === 'voice' || country !== 'US' || showOther
+  const showUs = channel === 'sms' && (country !== 'IN' || showOther)
   const q = useSmsRegistration(app!.id)
   const qc = useQueryClient()
   const write = can('settings.write')
-  const [form, setForm] = useState({ principal_entity_id: '', entity_name: '', dlt_platform: '', us_brand_id: '', us_campaign_id: '', us_messaging_service_sid: '' })
+  const crumbs = useCrumbs('DLT & 10DLC')
+  const [form, setForm] = useState({ principal_entity_id: '', entity_name: '', dlt_platform: '', us_brand_id: '', us_campaign_id: '' })
   const [attest, setAttest] = useState(false)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
@@ -877,7 +923,6 @@ export function SmsRegistrationPage() {
         dlt_platform: q.data.dlt_platform ?? '',
         us_brand_id: q.data.us_brand_id ?? '',
         us_campaign_id: q.data.us_campaign_id ?? '',
-        us_messaging_service_sid: q.data.us_messaging_service_sid ?? '',
       })
   }, [q.data])
   const dirty = useMemo(() => q.data && Object.entries(form).some(([k, v]) => (q.data![k as keyof typeof form] ?? '') !== v), [form, q.data])
@@ -898,7 +943,16 @@ export function SmsRegistrationPage() {
   }
   return (
     <>
-      <PageHeader breadcrumbs={useCrumbs('DLT & 10DLC')} title="DLT & 10DLC registration" description="Carriers in India and the US block business texts from unregistered senders." />
+      <BackToCampaignBanner />
+      {channel === 'voice' ? (
+        <PageHeader
+          breadcrumbs={[{ label: org?.name ?? '' }, { label: app!.name, to: `/apps/${app!.id}` }, { label: 'Voice', to: `/apps/${app!.id}/voice` }, { label: 'DLT registration' }]}
+          title="DLT registration (shared by SMS and voice)"
+          description="Indian operators block business calls and texts from entities not registered on a DLT portal. One registration covers both channels."
+        />
+      ) : (
+        <PageHeader breadcrumbs={crumbs} title="DLT & 10DLC registration" description="Carriers in India and the US block business texts from unregistered senders." />
+      )}
       {q.isLoading ? (
         <Skeleton className="h-64 w-full" />
       ) : q.isError ? (
@@ -906,13 +960,14 @@ export function SmsRegistrationPage() {
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
           <div className="space-y-6">
+            {showIndia && (
             <Card>
               <CardHeader>
                 <CardTitle>🇮🇳 India: TRAI DLT</CardTitle>
                 <CardDescription>Your Principal Entity registration on an operator DLT portal. Headers and templates are registered under it.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 sm:grid-cols-2">
-                <Field label="Principal Entity ID" htmlFor="r-pe" hint="Digits only, usually 19">
+                <Field label="Principal Entity ID" htmlFor="r-pe" hint="Digits only, usually 19" action={<WhatIsThis term="pe_id" />}>
                   <Input id="r-pe" inputMode="numeric" value={form.principal_entity_id} onChange={set('principal_entity_id')} disabled={!write} className="font-mono" />
                 </Field>
                 <Field label="Registered entity name" htmlFor="r-name">
@@ -928,9 +983,11 @@ export function SmsRegistrationPage() {
                 </Field>
               </CardContent>
             </Card>
+            )}
+            {showUs && (
             <Card>
               <CardHeader>
-                <CardTitle>🇺🇸 United States: A2P 10DLC</CardTitle>
+                <CardTitle>🇺🇸 United States: A2P 10DLC <WhatIsThis term="tendlc" /></CardTitle>
                 <CardDescription>Brand and campaign IDs from The Campaign Registry, via your provider. Required for texting from local 10-digit numbers.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -940,11 +997,14 @@ export function SmsRegistrationPage() {
                 <Field label="Campaign ID" htmlFor="r-camp">
                   <Input id="r-camp" value={form.us_campaign_id} onChange={set('us_campaign_id')} disabled={!write} className="font-mono" />
                 </Field>
-                <Field label="Twilio Messaging Service SID (optional)" htmlFor="r-mss" className="sm:col-span-2">
-                  <Input id="r-mss" value={form.us_messaging_service_sid} onChange={set('us_messaging_service_sid')} disabled={!write} className="font-mono" placeholder="MG…" />
-                </Field>
               </CardContent>
             </Card>
+            )}
+            {channel === 'sms' && country && !showOther && (
+              <button className="text-sm font-medium text-primary hover:underline" onClick={() => setShowOther(true)} data-testid="show-other-market">
+                Also sending to {country === 'IN' ? 'the United States' : 'India'}?
+              </button>
+            )}
             {write && (
               <Card>
                 <CardContent className="space-y-4 pt-6">
@@ -1057,6 +1117,53 @@ function SimulateReplyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   )
 }
 
+/** Act on a reply: open the contact, create a follow-up task (assigned to the contact's owner) or start a deal. */
+function ReplyActions({ reply }: { reply: SmsInboundItem }) {
+  const { app, can } = useWorkspace()
+  const c = reply.contact!
+  const contactUrl = `/apps/${app!.id}/audience/contacts/${c.id}`
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label={`Actions for reply from ${c.name}`}>
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild>
+          <Link to={contactUrl}>Open contact</Link>
+        </DropdownMenuItem>
+        {can('crm.write') && (
+          <DropdownMenuItem
+            onSelect={async () => {
+              try {
+                await crmApi(app!.id).createTask({
+                  title: `Reply to ${c.name}: “${reply.body.slice(0, 60)}”`,
+                  type: 'call',
+                  contact_id: c.id,
+                  assignee_id: c.owner_id ?? undefined,
+                  notes: `SMS reply received ${formatDateTime(reply.received_at)}${reply.campaign ? ` to “${reply.campaign.name}”` : ''}:
+${reply.body}`,
+                })
+                toast.success('Follow-up task created', { action: { label: 'View tasks', onClick: () => window.location.assign(`/apps/${app!.id}/crm/tasks`) } })
+              } catch (e) {
+                toast.error(errorMessage(e))
+              }
+            }}
+          >
+            Create follow-up task
+          </DropdownMenuItem>
+        )}
+        {can('crm.write') && (
+          <DropdownMenuItem asChild>
+            <Link to={contactUrl}>Start a deal (on the contact)</Link>
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 const KEYWORD_BADGE = { stop: ['destructive', 'Opted out'], start: ['success', 'Opted in'], help: ['secondary', 'Help'] } as const
 
 export function SmsInboxPage() {
@@ -1094,16 +1201,33 @@ export function SmsInboxPage() {
                   <TH>From</TH>
                   <TH>To</TH>
                   <TH>Message</TH>
-                  <TH>Action</TH>
+                  <TH>Keyword</TH>
                   <TH>Received</TH>
+                  <TH className="w-10" />
                 </TR>
               </THead>
               <TBody>
                 {q.data.items.map((r) => (
                   <TR key={r.id}>
-                    <TD className="font-mono text-sm">{r.from}</TD>
+                    <TD>
+                      {r.contact ? (
+                        <Link className="text-sm font-medium hover:text-primary" to={`/apps/${app!.id}/audience/contacts/${r.contact.id}`} data-testid="reply-contact">
+                          {r.contact.name}
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Unknown number</span>
+                      )}
+                      <div className="font-mono text-xs text-muted-foreground">{r.from}</div>
+                    </TD>
                     <TD className="font-mono text-sm">{r.to}</TD>
-                    <TD className="max-w-sm truncate">{r.body}</TD>
+                    <TD className="max-w-sm">
+                      <div className="truncate">{r.body}</div>
+                      {r.campaign && (
+                        <Link className="text-xs text-muted-foreground hover:text-primary" to={`/apps/${app!.id}/sms/campaigns/${r.campaign.id}`} data-testid="reply-campaign">
+                          Reply to {r.campaign.name}
+                        </Link>
+                      )}
+                    </TD>
                     <TD>
                       {r.keyword ? (
                         <Badge variant={KEYWORD_BADGE[r.keyword][0]}>
@@ -1114,7 +1238,8 @@ export function SmsInboxPage() {
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </TD>
-                    <TD className="text-xs text-muted-foreground">{timeAgo(r.received_at)}</TD>
+                    <TD className="whitespace-nowrap text-xs text-muted-foreground">{timeAgo(r.received_at)}</TD>
+                    <TD>{r.contact && <ReplyActions reply={r} />}</TD>
                   </TR>
                 ))}
               </TBody>

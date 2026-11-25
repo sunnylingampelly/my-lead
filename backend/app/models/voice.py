@@ -1,12 +1,45 @@
-"""Voice: caller IDs, audio library, campaigns, calls and call events."""
+"""Voice: platform phone numbers, caller IDs, audio library, AI calling agents, campaigns, calls and events."""
 from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.audience import TenantMixin
-from app.models.base import Base, TimestampMixin, UTCDateTime, uuid_pk
+from app.models.base import Base, JSONText, TimestampMixin, UTCDateTime, uuid_pk
 from app.utils.time import utcnow
+
+
+class PhoneNumber(TimestampMixin, Base):
+    """A number the platform owns (bought from Twilio/Exotel/Telnyx). Platform inventory, never shown to
+    customers: calls pick their caller number from the pool automatically (services/voice/numbers.py).
+    available | retired. The organization/assignment/renewal columns are left from an earlier rental
+    model and are no longer used."""
+
+    __tablename__ = "phone_numbers"
+    __table_args__ = (Index("ix_phone_numbers_pool", "status", "country", "kind"),
+                      Index("ix_phone_numbers_renewal", "status", "next_renewal_at"))
+
+    id: Mapped[str] = uuid_pk()
+    number: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)  # E.164
+    country: Mapped[str] = mapped_column(String(2), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # series_140|series_160|local|toll_free
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="simulation")
+    provider_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="available")
+    organization_id: Mapped[str | None] = mapped_column(ForeignKey("organizations.id", ondelete="SET NULL"),
+                                                        nullable=True, index=True)
+    application_id: Mapped[str | None] = mapped_column(ForeignKey("applications.id", ondelete="SET NULL"),
+                                                       nullable=True, index=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    next_renewal_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # When the last renewal could not be charged (grace period runs from here).
+    renewal_failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    available_after: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    monthly_price: Mapped[float | None] = mapped_column(Numeric(12, 4), nullable=True)  # last charged, wallet currency
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    included: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # free under the plan
 
 
 class VoiceCallerId(TenantMixin, TimestampMixin, Base):
@@ -26,6 +59,9 @@ class VoiceCallerId(TenantMixin, TimestampMixin, Base):
     attested_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     attested_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Numbers rented from the platform pool. Older rows (numbers users added themselves) have none.
+    phone_number_id: Mapped[str | None] = mapped_column(ForeignKey("phone_numbers.id", ondelete="SET NULL"),
+                                                        nullable=True, index=True)
 
 
 class VoiceAudio(TenantMixin, TimestampMixin, Base):
@@ -46,6 +82,30 @@ class VoiceAudio(TenantMixin, TimestampMixin, Base):
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 
+class VoiceAgent(TenantMixin, TimestampMixin, Base):
+    """An AI calling agent a user teaches: what it says first, how it behaves, what it knows and what
+    it should capture from each conversation."""
+
+    __tablename__ = "voice_agents"
+    __table_args__ = (Index("ix_voice_agents_app_status", "application_id", "status"),)
+
+    id: Mapped[str] = uuid_pk()
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # draft|active
+    template: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    language: Mapped[str] = mapped_column(String(10), nullable=False, default="en-IN")
+    voice: Mapped[str] = mapped_column(String(10), nullable=False, default="female")
+    goal: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    greeting: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    knowledge: Mapped[str | None] = mapped_column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)  # ~60k chars
+    outcome_fields: Mapped[list] = mapped_column(JSONText(), nullable=False, default=list)
+    transfer_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    max_call_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+
 class VoiceCampaign(TenantMixin, TimestampMixin, Base):
     __tablename__ = "voice_campaigns"
     __table_args__ = (Index("ix_voice_campaigns_app_status", "application_id", "status"),
@@ -58,6 +118,9 @@ class VoiceCampaign(TenantMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     caller_ref: Mapped[str | None] = mapped_column(ForeignKey("voice_caller_ids.id", ondelete="SET NULL"), nullable=True)
     audio_id: Mapped[str | None] = mapped_column(ForeignKey("voice_audio.id", ondelete="SET NULL"), nullable=True)
+    # audio|tts|ai_agent. Older rows are derived from their audio (see campaigns.message_type_of).
+    message_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(ForeignKey("voice_agents.id", ondelete="SET NULL"), nullable=True)
     # Spoken before the message: who is calling (TCPA requires identifying the business up front).
     intro_text: Mapped[str | None] = mapped_column(String(300), nullable=True)
     # "Press 9 to stop these calls." Required for US prerecorded marketing calls.
@@ -91,6 +154,8 @@ class VoiceCall(TenantMixin, Base):
     campaign_id: Mapped[str] = mapped_column(ForeignKey("voice_campaigns.id", ondelete="CASCADE"), nullable=False)
     contact_id: Mapped[str | None] = mapped_column(ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
     to_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    # The Signalcraft pool number this call was placed from (picked at dial time).
+    from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     # queued|deferred|dialing|ringing|in_progress|completed|no_answer|busy|voicemail|failed|skipped
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
@@ -109,6 +174,15 @@ class VoiceCall(TenantMixin, Base):
     opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # AI-agent calls: the conversation and what was captured from it.
+    agent_id: Mapped[str | None] = mapped_column(ForeignKey("voice_agents.id", ondelete="SET NULL"), nullable=True)
+    transcript: Mapped[list | None] = mapped_column(JSONText(), nullable=True)  # [{role, text, at}]
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ai_interest: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ai_outcomes: Mapped[dict | None] = mapped_column(JSONText(), nullable=True)
+    ai_next_step: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ai_processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow, onupdate=utcnow)
 

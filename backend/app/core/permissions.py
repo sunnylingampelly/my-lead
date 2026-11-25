@@ -83,6 +83,14 @@ class Perm(StrEnum):
     BILLING_READ = "billing.read"
     BILLING_MANAGE = "billing.manage"
     AUDIT_READ = "audit.read"
+    CRM_READ = "crm.read"
+    CRM_WRITE = "crm.write"
+    CRM_MANAGE = "crm.manage"
+    CHAT_READ = "chat.read"
+    CHAT_WRITE = "chat.write"
+    CHAT_REPLY = "chat.reply"
+    FORMS_READ = "forms.read"
+    FORMS_WRITE = "forms.write"
 
 
 PERMISSION_DESCRIPTIONS = {
@@ -112,12 +120,23 @@ PERMISSION_DESCRIPTIONS = {
     Perm.BILLING_READ: "View wallet and usage",
     Perm.BILLING_MANAGE: "Purchase credits and manage billing",
     Perm.AUDIT_READ: "View audit logs",
+    Perm.CRM_READ: "View companies, deals, tasks and notes",
+    Perm.CRM_WRITE: "Create and edit companies, deals, tasks and notes",
+    Perm.CRM_MANAGE: "Manage pipelines, assignment rules, lead scoring and CRM settings",
+    Perm.CHAT_READ: "View chatbots, chat conversations and chat analytics",
+    Perm.CHAT_WRITE: "Create, train and publish website chatbots",
+    Perm.CHAT_REPLY: "Answer visitors in the live-chat inbox",
+    Perm.FORMS_READ: "View lead forms, their submissions and analytics",
+    Perm.FORMS_WRITE: "Create, edit and publish lead forms and manage submissions",
 }
 
 _ALL = set(Perm)
 _APP_WORK = {
     Perm.APP_READ, Perm.AUDIENCE_READ, Perm.AUDIENCE_WRITE, Perm.CAMPAIGNS_READ, Perm.CAMPAIGNS_WRITE,
     Perm.CAMPAIGNS_LAUNCH, Perm.AUTOMATION_READ, Perm.AUTOMATION_WRITE, Perm.ANALYTICS_READ, Perm.SETTINGS_READ,
+    Perm.CRM_READ, Perm.CRM_WRITE,
+    Perm.CHAT_READ, Perm.CHAT_WRITE, Perm.CHAT_REPLY,
+    Perm.FORMS_READ, Perm.FORMS_WRITE,
 }
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Perm]] = {
@@ -126,20 +145,22 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Perm]] = {
     Role.APPLICATION_MANAGER: frozenset(
         _APP_WORK
         | {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.APPS_CREATE, Perm.APP_UPDATE, Perm.APP_MEMBERS_MANAGE,
-           Perm.SETTINGS_WRITE, Perm.BILLING_READ, Perm.AUDIT_READ, Perm.AUDIENCE_EXPORT}
+           Perm.SETTINGS_WRITE, Perm.BILLING_READ, Perm.AUDIT_READ, Perm.AUDIENCE_EXPORT, Perm.CRM_MANAGE}
     ),
     Role.CAMPAIGN_MANAGER: frozenset(_APP_WORK | {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.AUDIENCE_EXPORT}),
     Role.ANALYST: frozenset(
         {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ,
-         Perm.AUTOMATION_READ, Perm.ANALYTICS_READ, Perm.SETTINGS_READ, Perm.BILLING_READ}
+         Perm.AUTOMATION_READ, Perm.ANALYTICS_READ, Perm.SETTINGS_READ, Perm.BILLING_READ, Perm.CRM_READ,
+         Perm.CHAT_READ, Perm.FORMS_READ}
     ),
     Role.VIEWER: frozenset(
         {Perm.ORG_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ, Perm.AUTOMATION_READ,
-         Perm.ANALYTICS_READ}
+         Perm.ANALYTICS_READ, Perm.CRM_READ, Perm.CHAT_READ, Perm.FORMS_READ}
     ),
     Role.PLATFORM_SUPPORT: frozenset(
         {Perm.ORG_READ, Perm.MEMBERS_READ, Perm.APP_READ, Perm.AUDIENCE_READ, Perm.CAMPAIGNS_READ,
-         Perm.AUTOMATION_READ, Perm.ANALYTICS_READ, Perm.SETTINGS_READ, Perm.BILLING_READ, Perm.AUDIT_READ}),
+         Perm.AUTOMATION_READ, Perm.ANALYTICS_READ, Perm.SETTINGS_READ, Perm.BILLING_READ, Perm.AUDIT_READ,
+         Perm.CRM_READ, Perm.CHAT_READ, Perm.FORMS_READ}),
 }
 
 

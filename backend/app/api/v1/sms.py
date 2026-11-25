@@ -27,6 +27,7 @@ from app.schemas.sms import (
     TestSend,
 )
 from app.services.email.campaigns import custom_keys
+from app.services.email.readiness import safe_commit, wallet_info
 from app.services.sms import campaigns, registration, rules
 from app.services.sms.encoding import analyse
 
@@ -181,7 +182,7 @@ def get_campaign(campaign_id: str, ctx: AppCtx, db: DB):
 @router.patch("/campaigns/{campaign_id}", response_model=CampaignOut)
 def update_campaign(campaign_id: str, body: CampaignUpdate, ctx: AppCtx, db: DB):
     c = campaigns.update_campaign(db, ctx, campaign_id, body)
-    db.commit()
+    safe_commit(db, "the campaign")
     return campaigns.to_out(db, c)
 
 
@@ -203,13 +204,23 @@ def readiness(campaign_id: str, ctx: AppCtx, db: DB):
     ctx.require(Perm.CAMPAIGNS_READ)
     c = campaigns._get(db, ctx, campaign_id)
     checks, est = campaigns.readiness(db, ctx, c)
-    sender = campaigns.sender_of(db, c)
-    country = sender.country if sender else None
+    # Before a sender is chosen, price and rules follow the application's home market.
+    sender, country = campaigns.country_of(db, ctx, c)
     shape = campaigns.message_shape(c.body, country=country, category=c.category, append_opt_out=c.append_opt_out)
     cost = campaigns.cost_estimate(est.eligible if est else 0, shape["segments"], country, c.category)
     return {"ready": all(ch.ok for ch in checks), "checks": [ch.model_dump() for ch in checks],
             "estimate": est.model_dump() if est else None, "message": shape, "cost": cost,
+            "country": country, "sender_chosen": sender is not None,
+            "wallet": wallet_info(db, ctx.organization_id),
+            "quiet_hours": campaigns.quiet_wait(db, ctx, c, country),
             "custom_keys": sorted(custom_keys(db, ctx.application_id))}
+
+
+@router.get("/campaigns/{campaign_id}/recipients/ids")
+def recipient_ids(campaign_id: str, ctx: AppCtx, db: DB,
+                  status_: str | None = Query(None, alias="status", max_length=20)):
+    """Contact ids behind a report tab (delivered, not_delivered, replied, opted_out…), max 5000."""
+    return campaigns.recipient_ids(db, ctx, campaign_id, status_)
 
 
 class PreviewBody(BaseModel):
@@ -287,15 +298,31 @@ def list_inbound(ctx: AppCtx, db: DB, paging: Paging):
     ctx.require(Perm.CAMPAIGNS_READ)
     from sqlalchemy import func, select
 
-    from app.models.sms import SmsInbound
+    from app.models import Contact
+    from app.models.sms import SmsCampaign, SmsInbound
     from app.utils.contact_normalize import mask_phone
 
     q = select(SmsInbound).where(SmsInbound.application_id == ctx.application_id)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    rows = db.scalars(q.order_by(SmsInbound.received_at.desc()).offset(paging.offset).limit(paging.page_size))
+    rows = list(db.scalars(q.order_by(SmsInbound.received_at.desc()).offset(paging.offset)
+                           .limit(paging.page_size)))
+    contacts = {c.id: c for c in db.scalars(select(Contact).where(
+        Contact.id.in_({r.contact_id for r in rows if r.contact_id}), Contact.application_id == ctx.application_id))}
+    camps = dict(db.execute(select(SmsCampaign.id, SmsCampaign.name).where(
+        SmsCampaign.id.in_({r.campaign_id for r in rows if r.campaign_id}))).all())
+
+    def contact_out(cid):
+        c = contacts.get(cid)
+        if c is None:
+            return None
+        return {"id": c.id, "name": c.full_name or c.email or mask_phone(c.phone or ""), "email": c.email,
+                "owner_id": getattr(c, "owner_id", None)}
+
     return {"items": [{"id": r.id, "from": mask_phone(r.from_phone), "to": r.to_sender, "body": r.body,
                        "keyword": r.keyword, "contacts_updated": r.contacts_updated,
-                       "received_at": r.received_at.isoformat()} for r in rows],
+                       "received_at": r.received_at.isoformat(), "contact": contact_out(r.contact_id),
+                       "campaign": {"id": r.campaign_id, "name": camps[r.campaign_id]}
+                       if r.campaign_id in camps else None} for r in rows],
             "total": total, "page": paging.page, "page_size": paging.page_size}
 
 

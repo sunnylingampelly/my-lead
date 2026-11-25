@@ -10,7 +10,6 @@ import {
   Clock,
   Copy,
   FileText,
-  Globe,
   LayoutTemplate,
   Mail,
   MailCheck,
@@ -29,8 +28,8 @@ import { emailApi, eqk, useCampaigns, useEmailOverview, useSenders, useTemplates
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Field, Input } from '@/components/ui/form-controls'
 import { Badge, Skeleton } from '@/components/ui/misc'
@@ -38,9 +37,12 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Pagination, StatCard } from '@/components/audience'
 import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
+import { DomainAuthCard } from './DomainAuthCard'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
 import type { CampaignListItem, EmailTemplate, Sender } from '@/types/email'
 import { NewCampaignButton } from './CampaignEditorPage'
+import { BackToCampaignBanner } from './campaignKit'
+import { AddSenderDialog } from './senderDialog'
 import { CampaignStatusBadge, HtmlEditor, pct, VariablePicker } from './components'
 import { STARTERS } from './starters'
 
@@ -70,13 +72,18 @@ export function EmailOverviewPage() {
         description="Campaign performance over the last 30 days, from real delivery and engagement records."
         actions={can('campaigns.write') && <NewCampaignButton />}
       />
-      {noVerified && can('settings.write') && (
-        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm text-warning-strong">
+      {noVerified && (
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm text-warning-strong" data-testid="email-setup">
           <TriangleAlert className="size-4" />
-          <span className="flex-1">You need a verified sender address before you can send.</span>
-          <Button size="sm" variant="outline" asChild>
-            <Link to={`${base}/senders`}>Add a sender</Link>
-          </Button>
+          <span className="min-w-0 flex-1">
+            You need a verified sender address before you can send.
+            {!can('settings.write') && ' Ask an admin of this application to add and confirm one.'}
+          </span>
+          {can('settings.write') && (
+            <Button size="sm" variant="outline" asChild>
+              <Link to={`${base}/senders`}>Add a sender</Link>
+            </Button>
+          )}
         </div>
       )}
       {q.isLoading ? (
@@ -93,9 +100,9 @@ export function EmailOverviewPage() {
               <StatCard label="Open rate" value={pct(q.data.last_30_days.open_rate)} icon={BadgeCheck} hint="Unique opens ÷ delivered" />
               <StatCard label="Click rate" value={pct(q.data.last_30_days.click_rate)} icon={MousePointerClick} hint="Unique clicks ÷ delivered" />
             </div>
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <Card className="lg:col-span-2">
-                <CardHeader className="flex-row items-center justify-between">
+                <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle>Recent campaigns</CardTitle>
                   <Button variant="link" size="sm" asChild>
                     <Link to={`${base}/campaigns`}>All campaigns</Link>
@@ -622,14 +629,11 @@ function SenderRow({ s }: { s: Sender }) {
 
 export function SendersPage() {
   const { app, can } = useWorkspace()
-  const q = useSenders(app!.id)
-  const qc = useQueryClient()
+  const q = useSenders(app!.id, true)
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ from_name: '', from_email: '', reply_to: '' })
-  const [busy, setBusy] = useState(false)
-  const domain = q.data?.find((s) => s.status === 'verified')?.domain ?? 'yourdomain.com'
   return (
     <>
+      <BackToCampaignBanner />
       <PageHeader
         breadcrumbs={useCrumbs('Senders')}
         title="Sender addresses"
@@ -656,76 +660,9 @@ export function SendersPage() {
             </ul>
           )}
         </Card>
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Globe className="size-4" /> Domain authentication
-            </CardTitle>
-            <CardDescription>Gmail and Yahoo require these for bulk senders. Add them at your DNS provider for {domain}.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-xs">
-            {[
-              ['SPF', 'TXT', domain, 'v=spf1 include:amazonses.com ~all'],
-              ['DKIM', 'CNAME', `selector._domainkey.${domain}`, 'Provided by SES or Brevo when you add the domain'],
-              ['DMARC', 'TXT', `_dmarc.${domain}`, 'v=DMARC1; p=none; rua=mailto:dmarc@' + domain],
-            ].map(([name, type, host, value]) => (
-              <div key={name} className="rounded-md border p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold">{name}</span>
-                  <Badge variant="secondary">{type}</Badge>
-                </div>
-                <div className="mt-1 break-all font-mono text-muted-foreground">{host}</div>
-                <div className="mt-0.5 break-all font-mono">{value}</div>
-              </div>
-            ))}
-            <p className="text-muted-foreground">These are guidance only. Domain records are checked by the email provider when live sending is enabled.</p>
-          </CardContent>
-        </Card>
+        <DomainAuthCard appId={app!.id} senders={q.data ?? []} />
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add a sender</DialogTitle>
-            <DialogDescription>We will email a confirmation link to this address. It can be used once confirmed.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Field label="From name" htmlFor="s-name" hint="Usually your brand, e.g. “Acme Deals”.">
-              <Input id="s-name" value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} />
-            </Field>
-            <Field label="From email" htmlFor="s-email" hint="Use an address on your own domain for the best deliverability.">
-              <Input id="s-email" type="email" value={form.from_email} onChange={(e) => setForm({ ...form, from_email: e.target.value })} />
-            </Field>
-            <Field label="Reply-to (optional)" htmlFor="s-reply">
-              <Input id="s-reply" type="email" value={form.reply_to} onChange={(e) => setForm({ ...form, reply_to: e.target.value })} />
-            </Field>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              loading={busy}
-              disabled={!form.from_name.trim() || !form.from_email.includes('@')}
-              onClick={async () => {
-                setBusy(true)
-                try {
-                  await emailApi(app!.id).createSender({ from_name: form.from_name, from_email: form.from_email, reply_to: form.reply_to || null })
-                  await qc.invalidateQueries({ queryKey: eqk.senders(app!.id) })
-                  toast.success(`Confirmation email sent to ${form.from_email}`)
-                  setForm({ from_name: '', from_email: '', reply_to: '' })
-                  setOpen(false)
-                } catch (e) {
-                  toast.error(errorMessage(e))
-                } finally {
-                  setBusy(false)
-                }
-              }}
-            >
-              Add and send confirmation
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddSenderDialog open={open} onOpenChange={setOpen} />
     </>
   )
 }

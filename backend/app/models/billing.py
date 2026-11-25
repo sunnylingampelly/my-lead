@@ -36,7 +36,7 @@ class WalletTransaction(Base):
     wallet_id: Mapped[str] = mapped_column(ForeignKey("wallets.id", ondelete="CASCADE"), nullable=False)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     application_id: Mapped[str | None] = mapped_column(ForeignKey("applications.id", ondelete="SET NULL"), nullable=True)
-    # trial_credit | test_credit | credit | usage | adjustment | refund
+    # trial_credit | test_credit | credit | usage | adjustment | refund | subscription | recurring
     type: Mapped[str] = mapped_column(String(20), nullable=False)
     channel: Mapped[str | None] = mapped_column(String(10), nullable=True)  # email|sms|voice for usage
     amount: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
@@ -67,6 +67,26 @@ class WalletHold(Base):
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="open")  # open|released
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     released_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class Subscription(TimestampMixin, Base):
+    """An organization's plan. Organizations without a row are on Starter (see services/billing/plans.py)."""
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (Index("ix_subscriptions_status_period_end", "status", "current_period_end"),)
+
+    id: Mapped[str] = uuid_pk()
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False,
+                                                 unique=True)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False, default="starter", server_default="starter")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active",
+                                        server_default="active")  # active | past_due
+    current_period_start: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # A downgrade waits for the end of the paid period: scheduled_plan takes effect at current_period_end.
+    scheduled_plan: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="0")
+    past_due_since: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class UsageSettlement(Base):

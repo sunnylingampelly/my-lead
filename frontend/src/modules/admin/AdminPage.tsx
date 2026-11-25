@@ -5,6 +5,8 @@ import { toast } from 'sonner'
 import { Building2, CheckCircle2, Eye, LifeBuoy, Mail, MessageSquare, PhoneCall, Plus, RotateCw, Search, ShieldAlert, Trash2, Users, Wallet, Workflow, XCircle } from 'lucide-react'
 import { adminApi, type AdminOrg, type AdminUser, staffApi, useAdminOrg, useAdminOrgs, useAdminOverview, useAdminSettings, useAdminUsers, useAdminWebhooks, useStaff, useSupportSessions } from '@/api/admin'
 import { errorMessage } from '@/api/client'
+import { qk } from '@/api/queries'
+import { orgApi } from '@/api/services'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +19,7 @@ import { Pagination, StatCard } from '@/components/audience'
 import { useUser } from '@/hooks/useAuth'
 import { cn, formatDate, formatDateTime, timeAgo } from '@/lib/utils'
 import { formatMoney } from '../sms/format'
+import { PhoneNumberPool } from './PhoneNumberPool'
 
 const TABS = [
   ['overview', 'Overview'],
@@ -24,6 +27,7 @@ const TABS = [
   ['users', 'Users'],
   ['support', 'Support access'],
   ['staff', 'Platform staff'],
+  ['numbers', 'Phone numbers'],
   ['webhooks', 'Webhooks'],
   ['settings', 'Settings'],
 ] as const
@@ -168,6 +172,9 @@ function OpenWorkspaceDialog({ orgId, orgName, onClose }: { orgId: string; orgNa
               try {
                 await staffApi.startSession(orgId, reason.trim(), Number(minutes))
                 await qc.invalidateQueries()
+                // The organizations list isn't on screen here, so invalidating doesn't refetch it. Fetch it now:
+                // the workspace must know about the customer's organization before we open it.
+                await qc.fetchQuery({ queryKey: qk.orgs, queryFn: orgApi.list, staleTime: 0 })
                 navigate(`/orgs/${orgId}/applications`)
               } catch (e) {
                 toast.error(errorMessage(e))
@@ -741,6 +748,31 @@ function SettingsTab() {
           ))}
         </CardContent>
       </Card>
+      {d.backups && (
+        <Card data-testid="backup-status">
+          <CardHeader>
+            <CardTitle>Database backups</CardTitle>
+            <CardDescription>Written by scripts/backup_db.py (see docs/operations.md).</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              {d.backups.stale
+                ? <XCircle className="size-4 shrink-0 text-danger-strong" />
+                : <CheckCircle2 className="size-4 shrink-0 text-success-strong" />}
+              <span>
+                {d.backups.last_backup_at
+                  ? <>Last backup {formatDateTime(d.backups.last_backup_at)} ({d.backups.age_hours}h ago){d.backups.stale && ' — older than a day'}</>
+                  : 'No backups found'}
+              </span>
+            </div>
+            {d.backups.last_backup_file && (
+              <div className="truncate font-mono text-xs text-muted-foreground">
+                {d.backups.last_backup_file} · {((d.backups.last_backup_bytes ?? 0) / 1048576).toFixed(1)} MB · {d.backups.count} kept
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
@@ -769,6 +801,7 @@ export function AdminPage() {
       {tab === 'users' && <UsersTab />}
       {tab === 'support' && <SupportTab />}
       {tab === 'staff' && <StaffTab />}
+      {tab === 'numbers' && <PhoneNumberPool />}
       {tab === 'webhooks' && <Webhooks />}
       {tab === 'settings' && <SettingsTab />}
     </>

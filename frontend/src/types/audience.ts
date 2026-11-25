@@ -30,6 +30,11 @@ export interface ContactListItem {
   tags: TagRef[]
   created_at: string
   last_activity_at: string | null
+  company_id?: string | null
+  owner_id?: string | null
+  owner_name?: string | null
+  lifecycle_stage?: string | null
+  lead_score?: number
 }
 
 export interface ContactDetail extends ContactListItem {
@@ -42,6 +47,7 @@ export interface ContactDetail extends ContactListItem {
   email_unsubscribed_at: string | null
   sms_unsubscribed_at: string | null
   voice_unsubscribed_at: string | null
+  dncr_registered?: boolean
   jurisdiction: string | null
   jurisdiction_name: string
   eligibility: Record<Channel, { eligible: boolean; reasons: string[] }>
@@ -56,6 +62,10 @@ export interface ContactFilters {
   segment_id?: string
   eligible_for?: Channel | ''
   country?: string
+  /** A user id, "me" or "unassigned". */
+  owner_id?: string
+  lifecycle_stage?: string
+  min_lead_score?: number | ''
 }
 
 export interface ConsentInput {
@@ -84,6 +94,12 @@ export interface ContactInput {
   list_ids?: string[]
   consent?: ConsentInput
   status?: ContactStatus
+  company_id?: string | null
+  owner_id?: string | null
+  lifecycle_stage?: string | null
+  clear_owner?: boolean
+  /** The number is on the UAE Do Not Call Registry: never called. */
+  dncr_registered?: boolean
 }
 
 export interface Attribute {
@@ -147,6 +163,8 @@ export interface FieldDef {
   group: string
   operators: string[]
   options?: string[]
+  /** Display names for option values that are ids (owners, pipeline stages). */
+  option_labels?: Record<string, string>
 }
 
 export interface FieldCatalog {
@@ -212,6 +230,7 @@ export interface ImportOptions {
   tag_names: string[]
   source?: string | null
   consent: ConsentInput & { confirmed: boolean }
+  create_companies?: boolean
 }
 
 export interface Activity {
@@ -270,5 +289,7 @@ export interface Compliance {
   email_requires_postal_address: boolean
   regulations: { name: string; summary: string }[]
   checks: { key: string; label: string; required: boolean; done: boolean; pending_module?: string }[]
+  /** Market notices, e.g. UAE SMS and calls "coming soon". */
+  notices?: { key: string; level: string; text: string }[]
   disclaimer: string
 }

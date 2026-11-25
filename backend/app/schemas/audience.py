@@ -7,6 +7,7 @@ from app.schemas.common import ORMModel
 
 Channel = Literal["email", "sms", "voice"]
 ContactStatus = Literal["active", "unsubscribed", "bounced", "blocked"]
+Lifecycle = Literal["subscriber", "lead", "mql", "sql", "opportunity", "customer", "other"]
 
 
 # ------------------------------------------------------------------ custom attributes
@@ -126,14 +127,24 @@ class ContactBase(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
-class ContactCreate(ContactBase):
+class ContactCrmFields(BaseModel):
+    """Optional CRM fields set together with the contact (need crm.write)."""
+
+    # A CRM company chosen in the form. The free-text company is set from it.
+    company_id: str | None = Field(default=None, max_length=36)
+    owner_id: str | None = Field(default=None, max_length=36)
+    lifecycle_stage: Lifecycle | None = None
+
+
+class ContactCreate(ContactBase, ContactCrmFields):
     tag_ids: list[str] = Field(default_factory=list, max_length=100)
     list_ids: list[str] = Field(default_factory=list, max_length=100)
     consent: ConsentInput = Field(default_factory=ConsentInput)
 
 
-class ContactUpdate(ContactBase):
+class ContactUpdate(ContactBase, ContactCrmFields):
     status: ContactStatus | None = None
+    clear_owner: bool = False
 
 
 class ConsentChange(BaseModel):
@@ -167,6 +178,12 @@ class ContactListItem(BaseModel):
     tags: list[TagOut]
     created_at: datetime
     last_activity_at: datetime | None
+    # CRM
+    company_id: str | None = None
+    owner_id: str | None = None
+    owner_name: str | None = None
+    lifecycle_stage: str | None = None
+    lead_score: int = 0
 
 
 class Eligibility(BaseModel):
@@ -198,15 +215,23 @@ class ContactFilters(BaseModel):
     segment_id: str | None = Field(default=None, max_length=36)
     eligible_for: Channel | None = None
     country: str | None = Field(default=None, max_length=2)
+    # CRM: a user id, "me" or "unassigned".
+    owner_id: str | None = Field(default=None, max_length=36)
+    lifecycle_stage: Lifecycle | None = None
+    min_lead_score: int | None = Field(default=None, ge=-100000, le=100000)
 
 
 class BulkAction(BaseModel):
-    action: Literal["delete", "add_tag", "remove_tag", "add_to_list", "remove_from_list"]
+    action: Literal["delete", "add_tag", "remove_tag", "add_to_list", "remove_from_list", "assign_owner",
+                    "set_lifecycle"]
     contact_ids: list[str] | None = Field(default=None, max_length=5000)
     # Apply to every contact matching these filters instead of explicit ids.
     filters: ContactFilters | None = None
     tag_id: str | None = Field(default=None, max_length=36)
     list_id: str | None = Field(default=None, max_length=36)
+    # assign_owner: a team member's id, or null to clear the owner.
+    owner_id: str | None = Field(default=None, max_length=36)
+    lifecycle_stage: Lifecycle | None = None
 
 
 class ActivityOut(ORMModel):
@@ -320,6 +345,8 @@ class ImportOptions(BaseModel):
     tag_names: list[str] = Field(default_factory=list, max_length=20)
     consent: ImportConsentOptions = Field(default_factory=ImportConsentOptions)
     source: str | None = Field(default=None, max_length=60)
+    # Create a CRM company for company names that don't match one yet (otherwise only existing ones link).
+    create_companies: bool = False
 
 
 class ImportMappingRequest(BaseModel):

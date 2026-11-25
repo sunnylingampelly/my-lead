@@ -14,6 +14,16 @@ import { useWorkspace } from '@/hooks/useWorkspace'
 import { formatCount } from '@/lib/regions'
 import { cn } from '@/lib/utils'
 import type { Channel, FieldCatalog, FieldDef, SegmentCondition, SegmentGroup } from '@/types/audience'
+import type { Lifecycle } from '@/types/crm'
+import { LIFECYCLE_LABEL } from '../crm/format'
+
+/** How a select option is shown: channel names, owner / stage names from option_labels, lifecycle labels. */
+function optionLabel(field: FieldDef, o: string) {
+  if (field.type === 'channel') return CHANNEL_META[o as Channel].label
+  if (field.option_labels?.[o]) return field.option_labels[o]
+  if (field.key === 'lifecycle_stage') return LIFECYCLE_LABEL[o as Lifecycle] ?? o
+  return o
+}
 
 const OP_LABELS: Record<string, string> = {
   is: 'is',
@@ -65,10 +75,10 @@ function ValueInput({ field, op, value, onChange, catalog }: { field?: FieldDef;
   if (field.type === 'select' || field.type === 'channel')
     return (
       <Select {...common} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose…</option>
+        <option value="">{field.options?.length ? 'Choose…' : field.key === 'deal_stage' ? 'No pipeline stages yet' : 'No options'}</option>
         {field.options?.map((o) => (
           <option key={o} value={o}>
-            {field.type === 'channel' ? CHANNEL_META[o as Channel].label : o}
+            {optionLabel(field, o)}
           </option>
         ))}
       </Select>

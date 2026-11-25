@@ -61,12 +61,25 @@ def resume_sms_campaigns() -> int:
     return len(rows)
 
 
+# SNS receipts are already normalised by sns_receipts.parse_log_event.
 STATUS_MAP = {
-    "twilio": {"delivered": "delivered", "undelivered": "undelivered", "failed": "failed"},
-    # MSG91 delivery report codes: 1 delivered, 2 failed, 9/16/17 rejected or DND/NDNC blocked.
-    "msg91": {"1": "delivered", "2": "failed", "9": "undelivered", "16": "undelivered", "17": "undelivered",
-              "delivered": "delivered", "failed": "failed", "rejected": "undelivered"},
+    "sns": {"delivered": "delivered", "undelivered": "undelivered", "failed": "failed"},
 }
+
+
+@celery_app.task(name="app.tasks.sms.poll_sns_receipts")
+def poll_sns_receipts() -> int:
+    """Read new delivery receipts from SNS delivery status logs (live mode only)."""
+    if settings.COMMUNICATION_MODE != "live" or not settings.SNS_SMS_RECEIPTS_ENABLED:
+        return 0
+    from app.services.sms import sns_receipts
+
+    with SessionLocal() as db:
+        try:
+            return sns_receipts.poll(db)
+        except Exception:
+            log.exception("sns_receipts_poll_failed")
+            return 0
 
 
 @celery_app.task(name="app.tasks.sms.process_sms_webhook", autoretry_for=(OperationalError,), retry_backoff=True,

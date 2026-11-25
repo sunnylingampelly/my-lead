@@ -6,14 +6,9 @@ import {
   ArrowLeft,
   ArrowRight,
   AudioLines,
+  Bot,
   CalendarClock,
-  Check,
-  CheckCircle2,
   Clock,
-  Cloud,
-  CloudOff,
-  Filter,
-  ListChecks,
   Loader2,
   Phone,
   PhoneCall,
@@ -21,10 +16,8 @@ import {
   Settings2,
   Upload,
   Users,
-  XCircle,
 } from 'lucide-react'
-import { useAudio, useCallers, useVoiceCampaign, useVoiceOptions, voiceApi, vqk } from '@/api/voice'
-import { useLists, useSegments } from '@/api/audience'
+import { useAgents, useAudio, useVoiceCampaign, useVoiceOptions, voiceApi, vqk } from '@/api/voice'
 import { errorMessage } from '@/api/client'
 import { ErrorState, FullPageSpinner } from '@/components/page'
 import { Button } from '@/components/ui/button'
@@ -42,7 +35,9 @@ import type { VoiceCampaign, VoiceCategory, VoiceLanguage } from '@/types/voice'
 import { CampaignStatusBadge } from '../email/components'
 import { formatMoney } from '../sms/format'
 import { ScriptPreview, TtsForm } from './components'
-import { CALLER_KIND_LABEL, CATEGORY_LABEL, formatDuration } from './format'
+import { AudiencePicker, QuietWaitNotice, ReadinessList, SaveIndicator, StepNav, useCampaignAutosave, useHere, WalletLine, WhatIsThis, withReturnTo } from '../email/campaignKit'
+import { NewAgentDialog } from './AgentsPages'
+import { CATEGORY_LABEL, formatDuration } from './format'
 
 const STEPS = [
   { key: 'setup', label: 'Setup', icon: Settings2 },
@@ -56,83 +51,29 @@ type Update = (p: Draft, immediate?: boolean) => void
 
 function useAutosave(appId: string, campaign: VoiceCampaign | undefined) {
   const qc = useQueryClient()
-  const [draft, setDraft] = useState<Draft>({})
-  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const pending = useRef<Draft>({})
-  const timer = useRef<number | undefined>(undefined)
-  const loaded = useRef(false)
-  useEffect(() => {
-    if (campaign && !loaded.current) {
-      loaded.current = true
-      setDraft(campaign)
-    }
-  }, [campaign])
-  const flush = useCallback(async () => {
-    window.clearTimeout(timer.current)
-    const body = pending.current
-    if (!campaign || !Object.keys(body).length) return true
-    pending.current = {}
-    setState('saving')
-    try {
-      const saved = await voiceApi(appId).updateCampaign(campaign.id, body)
-      qc.setQueryData(vqk.campaign(appId, campaign.id), saved)
-      setState('saved')
-      return true
-    } catch (e) {
-      pending.current = { ...body, ...pending.current }
-      setState('error')
-      toast.error(errorMessage(e))
-      return false
-    }
-  }, [appId, campaign, qc])
-  const update = useCallback(
-    (patch: Draft, immediate = false) => {
-      setDraft((d) => ({ ...d, ...patch }))
-      pending.current = { ...pending.current, ...patch }
-      window.clearTimeout(timer.current)
-      timer.current = window.setTimeout(flush, immediate ? 0 : 800)
-    },
-    [flush],
-  )
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  return { draft, update, flush, state }
+  return useCampaignAutosave<VoiceCampaign>({
+    campaign,
+    save: (id, body) => voiceApi(appId).updateCampaign(id, body),
+    onSaved: (saved) => qc.setQueryData(vqk.campaign(appId, saved.id), saved),
+    rest: 'your changes',
+  })
 }
 
-function SaveIndicator({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
-  if (state === 'saving')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> Saving…
-      </span>
-    )
-  if (state === 'error')
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-destructive">
-        <CloudOff className="size-3.5" /> Not saved
-      </span>
-    )
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="save-state">
-      <Cloud className="size-3.5" /> {state === 'saved' ? 'All changes saved' : 'Draft'}
-    </span>
-  )
-}
-
-function useCaller(draft: Draft) {
+/** The country calls go to. Signalcraft picks the caller number for it automatically at dial time. */
+function useMarket(): 'IN' | 'US' {
   const { app } = useWorkspace()
-  const callers = useCallers(app!.id)
-  return { callers, caller: callers.data?.find((c) => c.id === draft.caller_ref) ?? null }
+  return app!.default_country === 'US' ? 'US' : 'IN'
 }
 
 // ------------------------------------------------------------------ steps
 
 function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
-  const { app, can } = useWorkspace()
-  const { callers, caller } = useCaller(draft)
-  const wrongSeries = caller?.country === 'IN' && (caller.kind === 'series_140') !== (draft.category === 'promotional')
+  const { app } = useWorkspace()
+  const here = useHere()
+  const market = useMarket()
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <Card>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>Campaign</CardTitle>
           <CardDescription>The name is internal. People you call never see it.</CardDescription>
@@ -141,7 +82,11 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
           <Field label="Campaign name" htmlFor="c-name">
             <Input id="c-name" value={draft.name ?? ''} onChange={(e) => update({ name: e.target.value })} maxLength={160} />
           </Field>
-          <Field label="Call type" htmlFor="c-cat" hint="Promotional calls only go out inside the legal calling window: 09:00–21:00 in India, 08:00–21:00 in the US.">
+          <Field
+            label="Call type"
+            htmlFor="c-cat"
+            hint={`Promotional calls only go out inside the legal calling window: ${market === 'US' ? '08:00–21:00 in the US (TCPA)' : '09:00–21:00 in India (TRAI)'}, narrowed by your quiet hours.`}
+          >
             <div id="c-cat" className="grid grid-cols-3 gap-2" role="radiogroup">
               {(['promotional', 'transactional', 'service'] as VoiceCategory[]).map((k) => (
                 <button
@@ -149,7 +94,7 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
                   role="radio"
                   aria-checked={draft.category === k}
                   onClick={() => update({ category: k })}
-                  className={cn('rounded-lg border px-3 py-2 text-sm font-medium transition', draft.category === k ? 'border-primary bg-accent/50 text-foreground' : 'text-muted-foreground hover:bg-muted')}
+                  className={cn('min-w-0 truncate rounded-lg border px-2 py-2 text-sm font-medium transition', draft.category === k ? 'border-primary bg-accent/50 text-foreground' : 'text-muted-foreground hover:bg-muted')}
                 >
                   {CATEGORY_LABEL[k]}
                 </button>
@@ -158,46 +103,25 @@ function SetupStep({ draft, update }: { draft: Draft; update: Update }) {
           </Field>
         </CardContent>
       </Card>
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
-          <CardTitle>Caller ID</CardTitle>
-          <CardDescription>The number people see. It also decides which country you can call.</CardDescription>
+          <CardTitle>Who the call comes from</CardTitle>
+          <CardDescription>Signalcraft places the calls from a number it manages for {market === 'US' ? 'the United States' : 'India'}. There’s nothing to set up or pay for.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {callers.isLoading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : !callers.data?.length ? (
-            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-              No caller IDs yet.{' '}
-              {can('settings.write') ? (
-                <Link className="font-medium text-primary hover:underline" to={`/apps/${app!.id}/voice/callers`}>
-                  Add one
-                </Link>
-              ) : (
-                'Ask an admin to add one.'
-              )}
-            </div>
-          ) : (
-            <div className="space-y-2" role="radiogroup" aria-label="Caller ID">
-              {callers.data.map((c) => (
-                <label key={c.id} className={cn('flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition', draft.caller_ref === c.id && 'border-primary bg-accent/40')}>
-                  <input type="radio" className="accent-[hsl(var(--primary))]" checked={draft.caller_ref === c.id} onChange={() => update({ caller_ref: c.id })} />
-                  <Phone className="size-4 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-mono text-sm font-semibold">{c.number}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {c.country} · {CALLER_KIND_LABEL[c.kind]}
-                      {c.label && ` · ${c.label}`}
-                    </span>
-                  </span>
-                  {c.status === 'active' ? <span className="text-xs font-medium text-success-strong">Approved</span> : <span className="text-xs font-medium text-warning-strong">Not confirmed</span>}
-                </label>
-              ))}
-            </div>
-          )}
-          {wrongSeries && (
-            <p className="rounded-md bg-warning-soft px-3 py-2 text-xs text-warning-strong">
-              In India, promotional calls must come from a 140-series number and service or transactional calls from a 160-series number.
+          <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm" data-testid="managed-number-note">
+            <Phone className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <span>
+              Each person always sees the same number, so repeat calls and retries look consistent.
+              {market === 'IN' && ' Promotional and service calls use the TRAI-required number series automatically.'}
+            </span>
+          </div>
+          {market === 'IN' && (
+            <p className="text-xs text-muted-foreground">
+              Indian calls also need your DLT registration.{' '}
+              <Link className="font-medium text-primary hover:underline" to={withReturnTo(`/apps/${app!.id}/voice/registration`, here)}>
+                DLT registration (shared by SMS and voice)
+              </Link>
             </p>
           )}
         </CardContent>
@@ -213,12 +137,19 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
   const qc = useQueryClient()
   const audio = useAudio(app!.id)
   const options = useVoiceOptions(app!.id)
-  const { caller } = useCaller(draft)
+  const market = useMarket()
   const [tts, setTts] = useState<ReturnType<typeof blankTts> | null>(null)
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const defaultLang: VoiceLanguage = (caller?.country ?? app!.default_country) === 'US' ? 'en-US' : 'en-IN'
-  const previewKey = [draft.audio_id, draft.intro_text, draft.opt_out_keypress]
+  const defaultLang: VoiceLanguage = market === 'US' || app!.default_country === 'AE' ? 'en-US' : 'en-IN'
+  const agents = useAgents(app!.id)
+  const audioKind = audio.data?.find((a) => a.id === draft.audio_id)?.kind
+  const type = draft.message_type ?? (audioKind === 'tts' ? 'tts' : audioKind ? 'audio' : null)
+  const isAi = type === 'ai_agent'
+  const country = market
+  const aiPrice = options.data?.ai_pricing?.[country] ?? options.data?.ai_pricing?.default
+  const [newAgent, setNewAgent] = useState(false)
+  const previewKey = [draft.audio_id, draft.intro_text, draft.opt_out_keypress, draft.agent_id, draft.message_type]
   const [debounced, setDebounced] = useState(JSON.stringify(previewKey))
   useEffect(() => {
     const t = setTimeout(() => setDebounced(JSON.stringify(previewKey)), 900)
@@ -234,14 +165,88 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
   })
   const created = async (id: string) => {
     await qc.invalidateQueries({ queryKey: vqk.audio(app!.id) })
-    update({ audio_id: id }, true)
+    const kind = (await voiceApi(app!.id).audio()).find((a) => a.id === id)?.kind
+    update({ audio_id: id, message_type: kind === 'tts' ? 'tts' : 'audio' }, true)
   }
-  const usStrict = caller?.country === 'US' && draft.category === 'promotional'
+  const usStrict = market === 'US' && draft.category === 'promotional'
+  const TYPES = [
+    { key: 'audio' as const, label: 'Recorded audio', hint: 'Play a recording you upload (MP3 or WAV).', icon: Upload },
+    { key: 'tts' as const, label: 'Text to speech', hint: 'Type a message; the phone network reads it aloud.', icon: AudioLines },
+    { key: 'ai_agent' as const, label: 'AI agent', hint: 'An agent you trained holds a real conversation.', icon: Bot },
+  ]
+  const library = (audio.data ?? []).filter((a) => !type || (type === 'tts' ? a.kind === 'tts' : a.kind === 'upload'))
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      <div className="space-y-6">
-        <Card>
-          <CardHeader className="flex-row items-start justify-between gap-3">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="min-w-0 space-y-6">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Message type">
+          {TYPES.map((t) => (
+            <button
+              key={t.key}
+              role="radio"
+              aria-checked={type === t.key}
+              data-testid={`message-type-${t.key}`}
+              onClick={() => update({ message_type: t.key }, true)}
+              className={cn('flex min-w-0 items-start gap-3 rounded-xl border p-3 text-left transition', type === t.key ? 'border-primary bg-accent/40' : 'hover:bg-muted')}
+            >
+              <t.icon className="mt-0.5 size-5 shrink-0 text-primary" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{t.label}</span>
+                <span className="block text-xs text-muted-foreground">{t.hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {isAi ? (
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>AI agent</CardTitle>
+              <CardDescription>When someone answers, this agent talks with them. The transcript, a summary and what it captured are saved to the call and the contact’s CRM timeline.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {agents.isLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : !agents.data?.length ? (
+                <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                  You don’t have an AI agent yet.{' '}
+                  <button className="font-medium text-primary hover:underline" onClick={() => setNewAgent(true)}>
+                    Create one from a template
+                  </button>
+                </p>
+              ) : (
+                <div className="space-y-2" role="radiogroup" aria-label="AI agent">
+                  {agents.data.map((a) => (
+                    <label key={a.id} className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-lg border p-3 transition', draft.agent_id === a.id && 'border-primary bg-accent/40')}>
+                      <input type="radio" className="accent-[hsl(var(--primary))]" checked={draft.agent_id === a.id} onChange={() => update({ agent_id: a.id, message_type: 'ai_agent' }, true)} aria-label={a.name} />
+                      <Bot className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{a.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{a.goal || 'No goal yet'}</span>
+                      </span>
+                      <Badge variant={a.status === 'active' ? 'success' : 'secondary'}>{a.status === 'active' ? 'Active' : 'Draft'}</Badge>
+                    </label>
+                  ))}
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    <button className="inline-flex items-center gap-1 font-medium text-primary hover:underline" onClick={() => setNewAgent(true)}>
+                      <Plus className="size-3" /> New agent
+                    </button>
+                    {draft.agent_id && (
+                      <Link className="font-medium text-primary hover:underline" to={`/apps/${app!.id}/voice/agents/${draft.agent_id}`}>
+                        Open and test this agent
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              )}
+              {aiPrice && (
+                <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-testid="ai-price">
+                  AI calls cost {formatMoney(aiPrice.per_minute, aiPrice.currency)} per started minute of conversation. Estimates assume about {options.data?.ai_expected_minutes ?? 2} minutes per answered call. Pressing 9 during the call always opts the person out.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+        <Card className="min-w-0">
+          <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle>Message</CardTitle>
               <CardDescription>A recording you upload, or text spoken by the phone network’s voice. Text can be personalised.</CardDescription>
@@ -282,11 +287,13 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
               <Skeleton className="h-32 w-full" />
             ) : !audio.data?.length ? (
               <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Your audio library is empty. Upload an MP3 or WAV, or write a text-to-speech message.</p>
+            ) : !library.length ? (
+              <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">{type === 'tts' ? 'No text-to-speech messages yet. Write one with “Text to speech”.' : 'No recordings yet. Upload an MP3 or WAV.'}</p>
             ) : (
-              <div className="grid max-h-80 gap-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Message">
-                {audio.data.map((a) => (
+              <div className="grid max-h-80 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Message">
+                {library.map((a) => (
                   <label key={a.id} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', draft.audio_id === a.id && 'border-primary bg-accent/40')}>
-                    <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={draft.audio_id === a.id} onChange={() => update({ audio_id: a.id }, true)} aria-label={a.name} />
+                    <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={draft.audio_id === a.id} onChange={() => update({ audio_id: a.id, message_type: a.kind === 'tts' ? 'tts' : 'audio' }, true)} aria-label={a.name} />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium">{a.name}</span>
@@ -300,11 +307,14 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
             )}
           </CardContent>
         </Card>
-        <Card>
+        )}
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle>Call settings</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {!isAi && (
+            <>
             <Field label="Introduction" htmlFor="c-intro" hint={usStrict ? 'Required for US marketing calls: say who is calling at the very start (TCPA).' : 'Spoken first. Saying who is calling builds trust and is required in the US.'}>
               <Input id="c-intro" value={draft.intro_text ?? ''} maxLength={300} onChange={(e) => update({ intro_text: e.target.value })} />
             </Field>
@@ -315,7 +325,9 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
                 <span className="block text-xs text-muted-foreground">Pressing 9 removes consent and suppresses the number straight away. Required for US prerecorded marketing calls.</span>
               </span>
             </label>
-            <div className="grid gap-4 sm:grid-cols-2">
+            </>
+            )}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Attempts per person" htmlFor="c-att" hint="Busy and unanswered calls are retried.">
                 <Select id="c-att" value={draft.max_attempts ?? 2} onChange={(e) => update({ max_attempts: Number(e.target.value) })}>
                   {[1, 2, 3].map((n) => (
@@ -338,7 +350,7 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
           </CardContent>
         </Card>
       </div>
-      <div className="lg:sticky lg:top-20 lg:h-fit">
+      <div className="min-w-0 lg:sticky lg:top-20 lg:h-fit">
         <ScriptPreview steps={preview.data?.steps ?? []} language={preview.data?.language} seconds={preview.data?.seconds} label={preview.data?.contact_label} />
       </div>
       <Dialog open={!!tts} onOpenChange={(o) => !o && setTts(null)}>
@@ -374,6 +386,7 @@ function MessageStep({ draft, update, flush }: { draft: Draft; update: Update; f
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <NewAgentDialog open={newAgent} onOpenChange={setNewAgent} />
     </div>
   )
 }
@@ -384,75 +397,31 @@ const EXCLUDE_LABEL: Record<string, string> = {
   blocked: 'Blocked',
   suppressed: 'On the suppression list',
   no_consent: 'No consent to calls',
-  other_country: 'Outside the caller ID’s country',
+  other_country: 'Outside the phone number’s country',
 }
 
 function AudienceStep({ draft, update }: { draft: Draft; update: Update }) {
   const { app } = useWorkspace()
-  const { caller } = useCaller(draft)
-  const segments = useSegments(app!.id)
-  const lists = useLists(app!.id)
+  const market = useMarket()
+  const country = market
   const aud: CampaignAudience = draft.audience ?? {}
-  const set = (a: CampaignAudience) => update({ audience: { all: false, list_ids: [], segment_ids: [], ...a } })
   const key = JSON.stringify(aud)
   const [debounced, setDebounced] = useState(aud)
   useEffect(() => {
     const t = setTimeout(() => setDebounced(JSON.parse(key) as CampaignAudience), 300)
     return () => clearTimeout(t)
   }, [key])
-  const est = useQuery({ queryKey: ['voice-estimate', app!.id, debounced, caller?.country], queryFn: () => voiceApi(app!.id).estimate(debounced, caller?.country), placeholderData: (p) => p })
+  const est = useQuery({ queryKey: ['voice-estimate', app!.id, debounced, country], queryFn: () => voiceApi(app!.id).estimate(debounced, country), placeholderData: (p) => p })
   const f = (n: number) => formatCount(n, app!.default_country)
-  const toggle = (k: 'list_ids' | 'segment_ids', id: string, on: boolean) => {
-    const cur = new Set(aud[k] ?? [])
-    if (on) cur.add(id)
-    else cur.delete(id)
-    set({ ...aud, all: false, [k]: [...cur] })
-  }
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-      <Card>
+      <Card className="min-w-0">
         <CardHeader>
           <CardTitle>Who should we call?</CardTitle>
           <CardDescription>People in more than one segment or list are called once. Only contacts with consent to calls are included.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', aud.all && 'border-primary bg-accent/40')}>
-            <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!!aud.all} onChange={() => set({ all: true })} />
-            <span>
-              <span className="text-sm font-medium">All reachable contacts</span>
-              <span className="block text-xs text-muted-foreground">Everyone with consent to calls and a number in the caller ID’s country.</span>
-            </span>
-          </label>
-          <label className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', !aud.all && 'border-primary bg-accent/40')}>
-            <input type="radio" className="mt-1 accent-[hsl(var(--primary))]" checked={!aud.all} onChange={() => set({ ...aud, all: false })} />
-            <span className="text-sm font-medium">Specific segments and lists</span>
-          </label>
-          {!aud.all && (
-            <div className="grid gap-4 md:grid-cols-2">
-              {(
-                [
-                  ['segment_ids', 'Segments', Filter, segments.data?.map((s) => ({ id: s.id, name: s.name, n: s.last_count }))],
-                  ['list_ids', 'Lists', ListChecks, lists.data?.map((l) => ({ id: l.id, name: l.name, n: l.contact_count }))],
-                ] as const
-              ).map(([k, label, Icon, items]) => (
-                <div key={k}>
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Icon className="size-3.5" /> {label}
-                  </div>
-                  <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-                    {items?.length === 0 && <p className="p-2 text-sm text-muted-foreground">None yet.</p>}
-                    {items?.map((it) => (
-                      <label key={it.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                        <Checkbox checked={aud[k]?.includes(it.id) ?? false} onChange={(e) => toggle(k, it.id, e.target.checked)} aria-label={it.name} />
-                        <span className="flex-1 truncate">{it.name}</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{it.n === null ? '—' : f(it.n)}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        <CardContent>
+          <AudiencePicker audience={aud} onChange={(a) => update({ audience: a })} allHint="Everyone with consent to calls and a number in the phone number’s country." />
         </CardContent>
       </Card>
       <Card className="h-fit lg:sticky lg:top-20">
@@ -489,7 +458,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
   const navigate = useNavigate()
   const qc = useQueryClient()
   const api = voiceApi(app!.id)
-  const { caller } = useCaller(draft)
+  const market = useMarket()
   const ready = useQuery({ queryKey: vqk.readiness(app!.id, draft.id!), queryFn: () => api.readiness(draft.id!), refetchOnMount: 'always' })
   const [testTo, setTestTo] = useState('')
   const [testing, setTesting] = useState(false)
@@ -505,9 +474,6 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
   const [busy, setBusy] = useState(false)
   const eligible = ready.data?.estimate?.eligible ?? 0
   const f = (n: number) => formatCount(n, app!.default_country)
-  const stepFor: Record<string, StepKey> = { caller: 'setup', category: 'setup', message: 'message', personalisation: 'message', identification: 'message', opt_out: 'message', audience: 'audience' }
-  const linkFix: Record<string, string> = { registration: `/apps/${app!.id}/sms/registration`, provider: `/apps/${app!.id}/settings` }
-  if (caller && caller.status !== 'active') linkFix.caller = `/apps/${app!.id}/voice/callers`
   const cost = ready.data?.cost
 
   const launch = async () => {
@@ -534,7 +500,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Compliance checklist</CardTitle>
@@ -544,27 +510,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
             {ready.isLoading ? (
               <Skeleton className="h-40 w-full" />
             ) : (
-              <ul className="divide-y" data-testid="readiness">
-                {ready.data?.checks.map((c) => (
-                  <li key={c.key} className="flex items-start gap-3 py-3">
-                    {c.ok ? <CheckCircle2 className="mt-0.5 size-5 text-success-strong" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium">{c.label}</div>
-                      {c.detail && <div className="text-xs text-muted-foreground">{c.detail}</div>}
-                    </div>
-                    {!c.ok &&
-                      (linkFix[c.key] ? (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to={linkFix[c.key]!}>Fix</Link>
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={() => goTo(stepFor[c.key] ?? 'setup')}>
-                          Fix
-                        </Button>
-                      ))}
-                  </li>
-                ))}
-              </ul>
+              <ReadinessList checks={ready.data?.checks ?? []} channel="voice" onStep={(s) => goTo(s as StepKey)} />
             )}
           </CardContent>
         </Card>
@@ -575,15 +521,16 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
           <CardContent>
             <dl className="divide-y text-sm">
               {[
-                ['Caller ID', caller ? `${caller.number} (${caller.country})` : '—', 'setup'],
+                ['Calls from', `A Signalcraft number for ${market === 'US' ? 'the US' : 'India'}`, 'setup'],
+                ['Message', draft.message_type === 'ai_agent' ? 'AI agent conversation' : draft.message_type === 'tts' ? 'Text to speech' : draft.audio_id ? 'Recorded audio' : '—', 'message'],
                 ['Type', CATEGORY_LABEL[draft.category ?? 'promotional'], 'setup'],
-                ['Call length', ready.data ? `About ${formatDuration(ready.data.seconds)}` : '—', 'message'],
+                ['Call length', ready.data ? (cost?.ai ? `About ${cost.minutes_per_call} minutes per answered call (estimate)` : `About ${formatDuration(ready.data.seconds)}`) : '—', 'message'],
                 ['Attempts', `${draft.max_attempts ?? 2} per person`, 'message'],
                 ['Recipients', ready.data?.estimate ? `${f(eligible)} reachable contacts` : '—', 'audience'],
-                ['Maximum cost', cost ? `${formatMoney(cost.total, cost.currency)} if everyone answers (${formatMoney(cost.per_minute, cost.currency)} per minute)` : '—', 'audience'],
+                ['Maximum cost', cost ? `${formatMoney(cost.total, cost.currency)} if everyone answers (${formatMoney(cost.per_minute, cost.currency)} per minute${cost.ai ? ', AI rate' : ''})` : '—', 'audience'],
               ].map(([k, v, step]) => (
-                <div key={k} className="flex items-center gap-4 py-2.5">
-                  <dt className="w-32 shrink-0 text-muted-foreground">{k}</dt>
+                <div key={k} className="flex items-center gap-3 py-2.5 sm:gap-4">
+                  <dt className="w-24 shrink-0 text-muted-foreground sm:w-32">{k}</dt>
                   <dd className="min-w-0 flex-1 truncate" data-testid={k === 'Maximum cost' ? 'cost-estimate' : undefined}>
                     {v}
                   </dd>
@@ -593,25 +540,31 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 </div>
               ))}
             </dl>
+            <div className="mt-2">
+              <WalletLine wallet={ready.data?.wallet} cost={cost} />
+            </div>
             {ready.data && (
-              <p className="mt-3 flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+              <p className="mt-3 flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground" data-testid="calling-window">
                 <Clock className="mt-0.5 size-3.5 shrink-0" />
-                {draft.category === 'promotional'
-                  ? `Calls are placed only between ${ready.data.window[0]} and ${ready.data.window[1]} in each person’s time zone, and outside your quiet hours. Others wait.`
-                  : 'Calls respect your quiet hours in each person’s time zone.'}
+                <span>
+                  {ready.data.calling_hours.window.start
+                    ? `Calls are placed ${ready.data.calling_hours.window.start}–${ready.data.calling_hours.window.end} in each person’s time zone (${ready.data.calling_hours.window.reason.toLowerCase()}). Others wait.`
+                    : 'Calls respect your quiet hours in each person’s time zone.'}
+                  <WhatIsThis term={ready.data.country === 'US' ? 'tcpa' : 'quiet_hours'} />
+                </span>
               </p>
             )}
           </CardContent>
         </Card>
       </div>
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Place a test call</CardTitle>
-            <CardDescription>Up to three numbers, comma separated, in the caller ID’s country.</CardDescription>
+            <CardDescription>Up to three numbers, comma separated, in the phone number’s country.</CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
-            <Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={caller?.country === 'US' ? '+1 415 555 2671' : '+91 98765 43210'} aria-label="Test phone numbers" />
+            <Input className="min-w-0" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={market === 'US' ? '+1 415 555 2671' : '+91 98765 43210'} aria-label="Test phone numbers" />
             <Button
               variant="outline"
               loading={testing}
@@ -660,6 +613,7 @@ function ReviewStep({ draft, goTo, flush }: { draft: Draft; goTo: (s: StepKey) =
                 </Field>
               </div>
             )}
+            {mode === 'now' && <QuietWaitNotice q={ready.data?.calling_hours} noun={['call', 'calls']} app={app!} />}
             <Button className="w-full" size="lg" disabled={!ready.data?.ready} onClick={() => setConfirm(true)} data-testid="launch">
               {mode === 'now' ? <PhoneCall /> : <CalendarClock />}
               {mode === 'now' ? `Call ${f(eligible)} contacts` : 'Schedule campaign'}
@@ -708,9 +662,9 @@ export function VoiceCampaignEditorPage() {
   )
   const doneSteps = useMemo(() => {
     const d = new Set<StepKey>()
-    if (draft.caller_ref && draft.name) d.add('setup')
-    if (draft.audio_id) d.add('message')
-    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length) d.add('audience')
+    if (draft.name) d.add('setup')
+    if (draft.message_type === 'ai_agent' ? draft.agent_id : draft.audio_id) d.add('message')
+    if (draft.audience?.all || draft.audience?.segment_ids?.length || draft.audience?.list_ids?.length || draft.audience?.contact_ids?.length) d.add('audience')
     return d
   }, [draft])
 
@@ -758,28 +712,14 @@ export function VoiceCampaignEditorPage() {
         >
           <ArrowLeft />
         </Button>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-xl font-semibold tracking-tight">{draft.name || 'Untitled campaign'}</h1>
             <CampaignStatusBadge status={c.status} />
           </div>
-          <SaveIndicator state={state} />
+          <SaveIndicator state={state} onRetry={() => void flush()} />
         </div>
-        <nav className="ml-auto flex items-center gap-1 rounded-xl border bg-card p-1 shadow-card" aria-label="Campaign steps">
-          {STEPS.map((s, i) => (
-            <button
-              key={s.key}
-              onClick={() => goTo(s.key)}
-              aria-current={step === s.key ? 'step' : undefined}
-              className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition', step === s.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}
-            >
-              <span className={cn('flex size-5 items-center justify-center rounded-full text-[11px]', step === s.key ? 'bg-white/20' : doneSteps.has(s.key) ? 'bg-success-soft text-success-strong' : 'bg-muted')}>
-                {doneSteps.has(s.key) && step !== s.key ? <Check className="size-3" /> : i + 1}
-              </span>
-              <span className="hidden md:inline">{s.label}</span>
-            </button>
-          ))}
-        </nav>
+        <StepNav steps={STEPS} step={step} done={doneSteps} onGo={goTo} />
       </div>
       {step === 'setup' && <SetupStep draft={draft} update={update} />}
       {step === 'message' && <MessageStep draft={draft} update={update} flush={flush} />}

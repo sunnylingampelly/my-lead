@@ -27,7 +27,6 @@ class SmsDltConfiguration(TenantMixin, TimestampMixin, Base):
     dlt_platform: Mapped[str | None] = mapped_column(String(40), nullable=True)  # Jio, Airtel, Vodafone Idea, BSNL...
     us_brand_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     us_campaign_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    us_messaging_service_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attested_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     attested_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
@@ -155,9 +154,16 @@ class SmsInbound(TenantMixin, Base):
     """Replies received (used for STOP/HELP keywords). Body is kept short-lived for opt-out audit."""
 
     __tablename__ = "sms_inbound"
-    __table_args__ = (Index("ix_sms_inbound_app_time", "application_id", "received_at"),)
+    __table_args__ = (Index("ix_sms_inbound_app_time", "application_id", "received_at"),
+                      Index("ix_sms_inbound_contact", "contact_id", "received_at"),
+                      Index("ix_sms_inbound_campaign", "campaign_id", "keyword"))
 
     id: Mapped[str] = uuid_pk()
+    # Resolved at ingest: the contact with this number in the application, and the campaign that most
+    # recently texted it (a reply is usually a reply to that).
+    contact_id: Mapped[str | None] = mapped_column(ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    campaign_id: Mapped[str | None] = mapped_column(ForeignKey("sms_campaigns.id", ondelete="SET NULL"),
+                                                    nullable=True)
     from_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     to_sender: Mapped[str | None] = mapped_column(String(20), nullable=True)
     body: Mapped[str] = mapped_column(String(320), nullable=False)

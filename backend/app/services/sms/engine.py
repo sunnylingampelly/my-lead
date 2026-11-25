@@ -118,7 +118,6 @@ def launch(campaign_id: str) -> str:
                 "provider": sender.provider, "dlt_header_id": sender.dlt_header_id,
                 "dlt_template_id": t.dlt_template_id if t else None,
                 "principal_entity_id": reg.principal_entity_id if reg else None,
-                "messaging_service_sid": reg.us_messaging_service_sid if reg else None,
             }
             c.status, c.launched_at = "sending", utcnow()
             db.commit()
@@ -217,11 +216,6 @@ def _send_batch(db: Session, c: SmsCampaign, app: Application, quiet: tuple[str,
         SuppressionEntry.application_id == c.application_id, SuppressionEntry.channel == "sms",
         SuppressionEntry.value_hash.in_({identifier_hash(m.to_phone) for m in batch}))))
     unit, _ = rules.price(snap.get("country"), c.category)
-    callback = None
-    if pname == "twilio":
-        from app.services.email.render import public_url
-
-        callback = public_url("/webhooks/sms/twilio/status")
     for m in batch:
         contact = contacts.get(m.contact_id)
         reason = _ineligible(contact, m, suppressed)
@@ -245,8 +239,7 @@ def _send_batch(db: Session, c: SmsCampaign, app: Application, quiet: tuple[str,
                 to=m.to_phone, sender_id=snap.get("sender_id", ""), body=text, category=c.category,
                 unicode=info.encoding == "UCS-2", dlt_template_id=snap.get("dlt_template_id"),
                 dlt_entity_id=snap.get("principal_entity_id"),
-                messaging_service_sid=snap.get("messaging_service_sid"), status_callback=callback,
-                idempotency_key=m.id))
+                country=snap.get("country") or "", idempotency_key=m.id))
         except TransientSmsError as exc:
             if m.attempts >= MAX_ATTEMPTS:
                 m.status, m.error_code, m.error_message, m.failed_at = "failed", "retries_exhausted", str(exc)[:500], \

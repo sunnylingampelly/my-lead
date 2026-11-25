@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Trash2, UserMinus } from 'lucide-react'
-import { qk, useAppMembers, useAppSettings, useMembers } from '@/api/queries'
+import { FlaskConical, Trash2, UserMinus } from 'lucide-react'
+import { qk, useAppMembers, useAppSettings, useMembers, useProvidersStatus } from '@/api/queries'
 import { appApi } from '@/api/services'
 import { errorMessage } from '@/api/client'
 import { ErrorState, LoadingRows, PageHeader } from '@/components/page'
@@ -29,8 +29,20 @@ const ROLE_LABEL: Record<string, string> = {
   viewer: 'Viewer',
 }
 
+const TABS = ['general', 'delivery', 'compliance', 'access', 'danger'] as const
+
 export function AppSettingsPage() {
   const { app, org, can } = useWorkspace()
+  // The tab lives in ?tab= so other pages can link straight to compliance or delivery.
+  const [params, setParams] = useSearchParams()
+  const requested = params.get('tab') ?? 'general'
+  const tab = (TABS as readonly string[]).includes(requested) && (requested !== 'danger' || can('app.delete')) ? requested : 'general'
+  const setTab = (t: string) => {
+    const next = new URLSearchParams(params)
+    if (t === 'general') next.delete('tab')
+    else next.set('tab', t)
+    setParams(next, { replace: true })
+  }
   return (
     <>
       <PageHeader
@@ -38,8 +50,8 @@ export function AppSettingsPage() {
         title="Application settings"
         description="Configuration that applies only to this application."
       />
-      <Tabs defaultValue="general">
-        <TabsList>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="overflow-x-auto">
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="delivery">Delivery</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
@@ -108,6 +120,17 @@ function DeliveryTab() {
   const qc = useQueryClient()
   const { register, handleSubmit, formState } = useForm<ApplicationSettings>({ values: q.data })
   const editable = can('settings.write')
+  const providers = useProvidersStatus(app!.id)
+  const p = providers.data?.providers
+  /** Option label with "(not connected)" when the platform has no credentials for it. */
+  const opt = (channel: 'email' | 'sms' | 'voice', key: string, label: string) => {
+    const connected = key === 'simulation' || !p || p[channel][key]
+    return (
+      <option value={key} disabled={!connected}>
+        {connected ? label : `${label} (not connected)`}
+      </option>
+    )
+  }
 
   if (q.isLoading) return <Card className="max-w-2xl"><LoadingRows /></Card>
   if (q.isError) return <Card className="max-w-2xl"><ErrorState error={q.error} onRetry={() => q.refetch()} /></Card>
@@ -128,10 +151,18 @@ function DeliveryTab() {
         <CardHeader>
           <CardTitle>Audience and delivery</CardTitle>
           <CardDescription>
-            Providers stay in simulation until real credentials are configured by a platform administrator.
+            Providers marked “not connected” have no credentials on the platform yet; a platform administrator connects them.
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {providers.data?.simulation && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning-border bg-warning-soft px-3 py-2.5 text-sm text-warning-strong" data-testid="simulation-note">
+              <FlaskConical className="mt-0.5 size-4 shrink-0" />
+              <span>
+                <strong>Simulation mode — nothing is really sent.</strong> Campaigns run end to end with simulated delivery, whichever provider is chosen.
+              </span>
+            </div>
+          )}
           <fieldset disabled={!editable} className="grid gap-4 sm:grid-cols-2">
             <Field label="Duplicate contact rule" htmlFor="identity" hint="How imports and API calls match existing contacts. Locked once the first contact exists." className="sm:col-span-2">
               <Select id="identity" {...register('contact_identity_rule')}>
@@ -142,23 +173,23 @@ function DeliveryTab() {
             </Field>
             <Field label="Email provider" htmlFor="ep">
               <Select id="ep" {...register('default_email_provider')}>
-                <option value="simulation">Simulation</option>
-                <option value="ses">Amazon SES</option>
-                <option value="brevo">Brevo</option>
+                {opt('email', 'simulation', 'Simulation')}
+                {opt('email', 'ses', 'Amazon SES')}
+                {opt('email', 'brevo', 'Brevo')}
               </Select>
             </Field>
             <Field label="SMS provider" htmlFor="sp">
               <Select id="sp" {...register('default_sms_provider')}>
-                <option value="simulation">Simulation</option>
-                <option value="msg91">MSG91</option>
-                <option value="twilio">Twilio</option>
+                {opt('sms', 'simulation', 'Simulation')}
+                {opt('sms', 'sns', 'Amazon SNS')}
               </Select>
             </Field>
             <Field label="Voice provider" htmlFor="vp">
               <Select id="vp" {...register('default_voice_provider')}>
-                <option value="simulation">Simulation</option>
-                <option value="exotel">Exotel</option>
-                <option value="twilio">Twilio</option>
+                {opt('voice', 'simulation', 'Simulation')}
+                {opt('voice', 'telnyx', 'Telnyx')}
+                {opt('voice', 'exotel', 'Exotel')}
+                {opt('voice', 'twilio', 'Twilio')}
               </Select>
             </Field>
             <div />

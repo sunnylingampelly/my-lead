@@ -299,49 +299,16 @@ def downgrade() -> None:
         batch_op.drop_column('business_address')
         batch_op.drop_column('business_name')
 
-    with op.batch_alter_table('import_rows', schema=None) as batch_op:
-        batch_op.drop_index('ix_import_rows_import_status')
-
     op.drop_table('import_rows')
-    with op.batch_alter_table('contact_tags', schema=None) as batch_op:
-        batch_op.drop_index('ix_contact_tags_tag')
-
     op.drop_table('contact_tags')
-    with op.batch_alter_table('contact_lists', schema=None) as batch_op:
-        batch_op.drop_index('ix_contact_lists_list')
-
     op.drop_table('contact_lists')
-    with op.batch_alter_table('contact_activities', schema=None) as batch_op:
-        batch_op.drop_index('ix_contact_activities_contact')
-        batch_op.drop_index('ix_contact_activities_app')
-
     op.drop_table('contact_activities')
-    with op.batch_alter_table('consent_records', schema=None) as batch_op:
-        batch_op.drop_index('ix_consent_records_contact')
-
     op.drop_table('consent_records')
     op.drop_table('tags')
-    with op.batch_alter_table('suppression_entries', schema=None) as batch_op:
-        batch_op.drop_index('ix_suppression_app_created')
-
     op.drop_table('suppression_entries')
     op.drop_table('segments')
     op.drop_table('lists')
-    with op.batch_alter_table('imports', schema=None) as batch_op:
-        batch_op.drop_index('ix_imports_app_created')
-
     op.drop_table('imports')
-    with op.batch_alter_table('contacts', schema=None) as batch_op:
-        batch_op.drop_index('ix_contacts_phone_hash')
-        batch_op.drop_index('ix_contacts_email_hash')
-        batch_op.drop_index('ix_contacts_app_status')
-        batch_op.drop_index('ix_contacts_app_phone')
-        batch_op.drop_index('ix_contacts_app_last_activity')
-        batch_op.drop_index('ix_contacts_app_email')
-        batch_op.drop_index('ix_contacts_app_created')
-        batch_op.drop_index('ix_contacts_app_country_state')
-        batch_op.drop_index('ix_contacts_app_city')
-
     op.drop_table('contacts')
     op.drop_table('contact_custom_attributes')
     # ### end Alembic commands ###

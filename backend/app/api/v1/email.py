@@ -2,6 +2,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import JSONResponse
 
 from app.api.deps import DB, AppCtx
 from app.core.permissions import Perm
@@ -24,12 +25,25 @@ from app.schemas.email import (
     TemplateOut,
     TemplateUpdate,
     TestSendRequest,
+    dump_with_design,
+    without_design,
 )
 from app.services.email import campaigns, render, senders, templates
 from app.services.email.campaigns import custom_keys
+from app.services.email.readiness import safe_commit, wallet_info
 
 router = APIRouter(prefix="/apps/{app_id}/email", tags=["Email"])
 Paging = Annotated[PageParams, Depends()]
+
+
+def _tpl(t) -> TemplateOut:
+    return without_design(TemplateOut, t)
+
+
+def _out(out, status_code: int = 200) -> JSONResponse:
+    """Campaign/template responses carry the raw visual-editor design (see schemas.email.without_design)."""
+    body = [dump_with_design(o) for o in out] if isinstance(out, list) else dump_with_design(out)
+    return JSONResponse(body, status_code=status_code)
 
 
 @router.get("/overview")
@@ -96,33 +110,33 @@ def sender_tips(sender_id: str, ctx: AppCtx, db: DB):
 
 @router.get("/templates", response_model=list[TemplateOut])
 def list_templates(ctx: AppCtx, db: DB):
-    return templates.list_templates(db, ctx)
+    return _out([_tpl(t) for t in templates.list_templates(db, ctx)])
 
 
 @router.post("/templates", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
 def create_template(body: TemplateBody, ctx: AppCtx, db: DB):
     t = templates.create_template(db, ctx, body)
     db.commit()
-    return t
+    return _out(_tpl(t), 201)
 
 
 @router.get("/templates/{template_id}", response_model=TemplateOut)
 def get_template(template_id: str, ctx: AppCtx, db: DB):
-    return templates.get_template(db, ctx, template_id)
+    return _out(_tpl(templates.get_template(db, ctx, template_id)))
 
 
 @router.patch("/templates/{template_id}", response_model=TemplateOut)
 def update_template(template_id: str, body: TemplateUpdate, ctx: AppCtx, db: DB):
     t = templates.update_template(db, ctx, template_id, body)
-    db.commit()
-    return t
+    safe_commit(db, "the template")
+    return _out(_tpl(t))
 
 
 @router.post("/templates/{template_id}/duplicate", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
 def duplicate_template(template_id: str, ctx: AppCtx, db: DB):
     t = templates.duplicate_template(db, ctx, template_id)
     db.commit()
-    return t
+    return _out(_tpl(t), 201)
 
 
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,7 +157,7 @@ def list_campaigns(ctx: AppCtx, db: DB, paging: Paging, status_: str | None = Qu
 def create_campaign(body: CampaignCreate, ctx: AppCtx, db: DB):
     c = campaigns.create_campaign(db, ctx, body)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c), 201)
 
 
 @router.post("/campaigns/estimate", response_model=Estimate)
@@ -154,14 +168,14 @@ def estimate_audience(body: Audience, ctx: AppCtx, db: DB):
 
 @router.get("/campaigns/{campaign_id}", response_model=CampaignOut)
 def get_campaign(campaign_id: str, ctx: AppCtx, db: DB):
-    return campaigns.get_campaign(db, ctx, campaign_id)
+    return _out(campaigns.get_campaign(db, ctx, campaign_id))
 
 
 @router.patch("/campaigns/{campaign_id}", response_model=CampaignOut)
 def update_campaign(campaign_id: str, body: CampaignUpdate, ctx: AppCtx, db: DB):
     c = campaigns.update_campaign(db, ctx, campaign_id, body)
-    db.commit()
-    return campaigns.to_out(db, c)
+    safe_commit(db, "the campaign")
+    return _out(campaigns.to_out(db, c))
 
 
 @router.delete("/campaigns/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -174,7 +188,7 @@ def delete_campaign(campaign_id: str, ctx: AppCtx, db: DB):
 def duplicate_campaign(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.duplicate_campaign(db, ctx, campaign_id)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c), 201)
 
 
 @router.get("/campaigns/{campaign_id}/readiness")
@@ -182,9 +196,23 @@ def readiness(campaign_id: str, ctx: AppCtx, db: DB):
     ctx.require(Perm.CAMPAIGNS_READ)
     c = campaigns._get(db, ctx, campaign_id)
     checks, est = campaigns.readiness(db, ctx, c)
+    from app.services.billing import wallet as wl
+
+    country = ctx.application.default_country if ctx.application else None
+    price, cur = wl.email_price(country)
+    eligible = est.eligible if est else 0
     return {"ready": all(ch.ok for ch in checks), "checks": [ch.model_dump() for ch in checks],
             "estimate": est.model_dump() if est else None,
+            "cost": {"unit_price": float(price), "currency": cur, "total": round(float(price) * eligible, 2)},
+            "wallet": wallet_info(db, ctx.organization_id),
             "custom_keys": sorted(custom_keys(db, ctx.application_id))}
+
+
+@router.get("/campaigns/{campaign_id}/recipients/ids")
+def recipient_ids(campaign_id: str, ctx: AppCtx, db: DB,
+                  status_: str | None = Query(None, alias="status", max_length=20)):
+    """Contact ids behind a report tab (opened, clicked, not_opened, bounced, unsubscribed…), max 5000."""
+    return campaigns.recipient_ids(db, ctx, campaign_id, status_)
 
 
 @router.post("/campaigns/{campaign_id}/preview", response_model=PreviewOut)
@@ -203,40 +231,40 @@ def send_test(campaign_id: str, body: TestSendRequest, ctx: AppCtx, db: DB):
 def schedule(campaign_id: str, body: ScheduleRequest, ctx: AppCtx, db: DB):
     c = campaigns.schedule(db, ctx, campaign_id, body)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.post("/campaigns/{campaign_id}/unschedule", response_model=CampaignOut)
 def unschedule(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.unschedule(db, ctx, campaign_id)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.post("/campaigns/{campaign_id}/send", response_model=CampaignOut)
 def send_now(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.send_now(db, ctx, campaign_id)
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.post("/campaigns/{campaign_id}/pause", response_model=CampaignOut)
 def pause(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.pause(db, ctx, campaign_id)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.post("/campaigns/{campaign_id}/resume", response_model=CampaignOut)
 def resume(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.resume(db, ctx, campaign_id)
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.post("/campaigns/{campaign_id}/cancel", response_model=CampaignOut)
 def cancel(campaign_id: str, ctx: AppCtx, db: DB):
     c = campaigns.cancel(db, ctx, campaign_id)
     db.commit()
-    return campaigns.to_out(db, c)
+    return _out(campaigns.to_out(db, c))
 
 
 @router.get("/campaigns/{campaign_id}/report")

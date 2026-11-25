@@ -81,7 +81,7 @@ test('US contact: phone normalised, written consent required for SMS, profile sh
   await dialog.getByLabel('Phone', { exact: true }).fill('(512) 555-0147')
   await dialog.getByLabel('Country', { exact: true }).selectOption('US')
   await dialog.getByLabel('State').selectOption('TX')
-  await dialog.getByRole('checkbox', { name: 'SMS', exact: true }).check()
+  await dialog.getByRole('checkbox', { name: 'SMS marketing consent' }).check()
   await dialog.getByLabel('Where was consent collected?').fill('Checkout opt-in')
   await expect(dialog.getByText('Written consent evidence (required for US numbers)')).toBeVisible()
   await dialog.getByRole('button', { name: 'Add contact' }).click()

@@ -2,6 +2,17 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { http } from './client'
 import type { Page } from '@/types/api'
 
+/** Newest database backup (scripts/backup_db.py), from the backup folder's file times. */
+export interface BackupStatus {
+  configured_dir: boolean
+  count: number
+  last_backup_at: string | null
+  last_backup_file: string | null
+  last_backup_bytes: number | null
+  age_hours: number | null
+  stale: boolean
+}
+
 export interface AdminOverview {
   organizations: number
   suspended_organizations: number
@@ -63,7 +74,7 @@ const params = (p: object) => ({ params: Object.fromEntries(Object.entries(p).fi
 
 export const adminApi = {
   overview: () => data(http.get<AdminOverview>('/admin/overview')),
-  settings: () => data(http.get<Record<string, unknown> & { providers: Record<string, Record<string, boolean>>; pricing: Record<string, unknown> }>('/admin/settings')),
+  settings: () => data(http.get<Record<string, unknown> & { providers: Record<string, Record<string, boolean>>; pricing: Record<string, unknown>; backups?: BackupStatus }>('/admin/settings')),
   orgs: (p: { page: number; page_size: number; search?: string; status?: string }) => data(http.get<Page<AdminOrg>>('/admin/organizations', params(p))),
   org: (id: string) => data(http.get<AdminOrgDetail>(`/admin/organizations/${id}`)),
   setOrgStatus: (id: string, action: 'suspend' | 'reactivate', reason: string) => data(http.post<AdminOrgDetail>(`/admin/organizations/${id}/${action}`, { reason })),

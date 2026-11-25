@@ -1,9 +1,15 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { http } from './client'
 import type { Page } from '@/types/api'
-import type { CampaignAudience, Estimate } from '@/types/email'
+import type { CampaignAudience, Estimate, RecipientIds } from '@/types/email'
 import type {
-  CallerId,
+  AgentReply,
+  AgentTemplate,
+  CallEvaluation,
+  ChatMessage,
+  VoiceAgent,
+  VoiceAgentListItem,
+  VoiceCallDetail,
   VoiceAudio,
   VoiceCall,
   VoiceCampaign,
@@ -25,13 +31,6 @@ export const voiceApi = (appId: string) => {
     overview: () => data(http.get<VoiceOverview>(`${b}/overview`)),
     options: () => data(http.get<VoiceOptions>(`${b}/options`)),
 
-    callers: () => data(http.get<CallerId[]>(`${b}/callers`)),
-    createCaller: (body: Pick<CallerId, 'number' | 'country' | 'kind' | 'provider'> & { label?: string | null }) => data(http.post<CallerId>(`${b}/callers`, body)),
-    providerNumbers: () => data(http.get<{ configured: boolean; numbers: { number: string; label: string | null }[] }>(`${b}/provider-numbers`, { params: { provider: 'telnyx' } })),
-    attestCaller: (id: string) => data(http.post<CallerId>(`${b}/callers/${id}/attest`)),
-    defaultCaller: (id: string) => data(http.post<CallerId>(`${b}/callers/${id}/default`)),
-    deleteCaller: (id: string) => data(http.delete(`${b}/callers/${id}`)),
-
     audio: () => data(http.get<VoiceAudio[]>(`${b}/audio`)),
     uploadAudio: (file: File, name: string) => {
       const form = new FormData()
@@ -45,7 +44,8 @@ export const voiceApi = (appId: string) => {
 
     campaigns: (p: Paging) => data(http.get<Page<VoiceCampaignListItem>>(`${b}/campaigns`, clean(p))),
     campaign: (id: string) => data(http.get<VoiceCampaign>(`${b}/campaigns/${id}`)),
-    createCampaign: (body: { name: string; category?: string; audio_id?: string | null }) => data(http.post<VoiceCampaign>(`${b}/campaigns`, body)),
+    createCampaign: (body: { name: string; category?: string; audio_id?: string | null; agent_id?: string | null; audience?: CampaignAudience }) => data(http.post<VoiceCampaign>(`${b}/campaigns`, body)),
+    recipientIds: (id: string, status?: string) => data(http.get<RecipientIds>(`${b}/campaigns/${id}/recipients/ids`, { params: status ? { status } : {} })),
     updateCampaign: (id: string, body: Partial<VoiceCampaign>) => data(http.patch<VoiceCampaign>(`${b}/campaigns/${id}`, body)),
     deleteCampaign: (id: string) => data(http.delete(`${b}/campaigns/${id}`)),
     duplicateCampaign: (id: string) => data(http.post<VoiceCampaign>(`${b}/campaigns/${id}/duplicate`)),
@@ -62,6 +62,21 @@ export const voiceApi = (appId: string) => {
     cancel: (id: string) => data(http.post<VoiceCampaign>(`${b}/campaigns/${id}/cancel`)),
     report: (id: string) => data(http.get<VoiceReport>(`${b}/campaigns/${id}/report`)),
     calls: (id: string, p: Paging) => data(http.get<Page<VoiceCall>>(`${b}/campaigns/${id}/calls`, clean(p))),
+    call: (id: string, callId: string) => data(http.get<VoiceCallDetail>(`${b}/campaigns/${id}/calls/${callId}`)),
+
+    aiStatus: () => data(http.get<{ configured: boolean; model: string }>(`${b}/ai/status`)),
+    agentTemplates: () => data(http.get<AgentTemplate[]>(`${b}/agents/templates`)),
+    agents: () => data(http.get<VoiceAgentListItem[]>(`${b}/agents`)),
+    agent: (id: string) => data(http.get<VoiceAgent>(`${b}/agents/${id}`)),
+    createAgent: (body: { name: string; template?: string | null }) => data(http.post<VoiceAgent>(`${b}/agents`, body)),
+    updateAgent: (id: string, body: Partial<VoiceAgent>) => data(http.patch<VoiceAgent>(`${b}/agents/${id}`, body)),
+    deleteAgent: (id: string) => data(http.delete(`${b}/agents/${id}`)),
+    duplicateAgent: (id: string) => data(http.post<VoiceAgent>(`${b}/agents/${id}/duplicate`)),
+    activateAgent: (id: string) => data(http.post<VoiceAgent>(`${b}/agents/${id}/activate`)),
+    deactivateAgent: (id: string) => data(http.post<VoiceAgent>(`${b}/agents/${id}/deactivate`)),
+    testAgent: (id: string, messages: ChatMessage[], first_name?: string) =>
+      data(http.post<AgentReply>(`${b}/agents/${id}/test`, { messages, contact: first_name ? { first_name } : null })),
+    evaluateAgent: (id: string, messages: ChatMessage[]) => data(http.post<CallEvaluation>(`${b}/agents/${id}/test/evaluate`, { messages })),
   }
 }
 
@@ -69,7 +84,9 @@ export const vqk = {
   all: (appId: string) => ['voice', appId] as const,
   overview: (appId: string) => ['voice', appId, 'overview'] as const,
   options: (appId: string) => ['voice', appId, 'options'] as const,
-  callers: (appId: string) => ['voice', appId, 'callers'] as const,
+  agents: (appId: string) => ['voice', appId, 'agents'] as const,
+  agent: (appId: string, id: string) => ['voice', appId, 'agent', id] as const,
+  aiStatus: (appId: string) => ['voice', appId, 'ai-status'] as const,
   audio: (appId: string) => ['voice', appId, 'audio'] as const,
   campaigns: (appId: string, p: object) => ['voice', appId, 'campaigns', p] as const,
   campaign: (appId: string, id: string) => ['voice', appId, 'campaign', id] as const,
@@ -82,7 +99,8 @@ const LIVE = ['queued', 'sending']
 
 export const useVoiceOverview = (appId: string) => useQuery({ queryKey: vqk.overview(appId), queryFn: () => voiceApi(appId).overview(), refetchOnMount: 'always' })
 export const useVoiceOptions = (appId: string) => useQuery({ queryKey: vqk.options(appId), queryFn: () => voiceApi(appId).options(), staleTime: 300_000 })
-export const useCallers = (appId: string) => useQuery({ queryKey: vqk.callers(appId), queryFn: () => voiceApi(appId).callers(), refetchOnMount: 'always' })
+export const useAgents = (appId: string) => useQuery({ queryKey: vqk.agents(appId), queryFn: () => voiceApi(appId).agents() })
+export const useAiStatus = (appId: string) => useQuery({ queryKey: vqk.aiStatus(appId), queryFn: () => voiceApi(appId).aiStatus(), staleTime: 300_000 })
 export const useAudio = (appId: string) => useQuery({ queryKey: vqk.audio(appId), queryFn: () => voiceApi(appId).audio() })
 export const useVoiceCampaigns = (appId: string, p: Paging) =>
   useQuery({

@@ -1,8 +1,8 @@
 """Test fixtures.
 
-Tests run against a temporary SQLite database built by the real Alembic migrations, with Celery
-in eager mode and the simulation email provider writing to a temporary mailbox. The same suite
-runs against MySQL by setting TEST_DATABASE_URL (used in the Docker test profile).
+Tests run against a dedicated MySQL database (TEST_DATABASE_URL, default `signalcraft_test` on
+localhost) built by the real Alembic migrations, with Celery in eager mode and the simulation email
+provider writing to a temporary mailbox. The test database is wiped at the start of every run.
 """
 import json
 import os
@@ -14,7 +14,10 @@ from urllib.parse import unquote
 
 _TMP = Path(tempfile.mkdtemp(prefix="signalcraft-tests-"))
 os.environ["ENVIRONMENT"] = "test"
-os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{(_TMP / 'test.db').as_posix()}")
+os.environ["DATABASE_URL"] = os.environ.get(
+    "TEST_DATABASE_URL", "mysql+pymysql://root:@127.0.0.1:3306/signalcraft_test?charset=utf8mb4")
+if "test" not in os.environ["DATABASE_URL"].rsplit("/", 1)[-1]:
+    raise RuntimeError("TEST_DATABASE_URL must name a database containing 'test'; the suite wipes it")
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 os.environ["SIMULATION_MAILBOX_PATH"] = str(_TMP / "mailbox")
 os.environ["LOCAL_STORAGE_PATH"] = str(_TMP / "storage")
@@ -23,6 +26,7 @@ os.environ["SYSTEM_EMAIL_PROVIDER"] = "simulation"
 os.environ["RATE_LIMIT_ENABLED"] = "true"
 os.environ["RATE_LIMIT_AUTH_PER_MINUTE"] = "1000"
 os.environ["LOG_LEVEL"] = "WARNING"
+os.environ["ANTHROPIC_API_KEY"] = ""  # AI agents use the offline responder in tests
 
 import pytest  # noqa: E402
 from alembic import command  # noqa: E402
@@ -51,8 +55,7 @@ def alembic_config(url: str) -> Config:
 @pytest.fixture(scope="session", autouse=True)
 def _database():
     with engine.begin() as conn:
-        if conn.dialect.name == "mysql":
-            conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
         Base.metadata.drop_all(conn)
         conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
     command.upgrade(alembic_config(settings.DATABASE_URL), "head")
@@ -65,13 +68,11 @@ def _database():
 def _clean_state():
     yield
     with engine.begin() as conn:
-        if conn.dialect.name == "mysql":
-            conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
         for table in reversed(Base.metadata.sorted_tables):
             if table.name not in SEEDED_TABLES:
                 conn.execute(table.delete())
-        if conn.dialect.name == "mysql":
-            conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
     shutil.rmtree(settings.SIMULATION_MAILBOX_PATH, ignore_errors=True)
     reset_rate_limits()
 
@@ -178,3 +179,22 @@ def invite_and_join(owner: Api, email: str, role: str, application_ids: list[str
     assert r.status_code == 201, r.text
     token = token_from_last_email(email, "/invite")
     return Api().register(email, email.split("@")[0].title(), invitation_token=token)
+
+
+def make_pro(organization_id: str) -> None:
+    """Put an organization on Pro for a month without charging the wallet (for tests that need
+    more than Starter's limits)."""
+    from datetime import timedelta
+
+    from app.core.database import SessionLocal
+    from app.models.billing import Subscription
+    from app.services.billing import subscriptions
+    from app.utils.time import utcnow
+
+    with SessionLocal() as db:
+        sub = subscriptions.get(db, organization_id) or Subscription(organization_id=organization_id)
+        now = utcnow().replace(microsecond=0)
+        sub.plan, sub.status, sub.scheduled_plan, sub.cancel_at_period_end = "pro", "active", None, False
+        sub.current_period_start, sub.current_period_end = now, now + timedelta(days=30)
+        db.add(sub)
+        db.commit()

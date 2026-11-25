@@ -3,54 +3,21 @@ import { useOrganizations } from '@/api/queries'
 import { FullPageSpinner } from '@/components/page'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
-import { AppLayout } from '@/layouts/AppLayout'
 import { useWorkspace } from '@/hooks/useWorkspace'
-import { AccountPage } from '@/modules/account/AccountPage'
-import { AppSettingsPage } from '@/modules/applications/AppSettingsPage'
-import { ApplicationsPage } from '@/modules/applications/ApplicationsPage'
-import { AcceptInvitePage } from '@/modules/auth/AcceptInvitePage'
-import { LoginPage } from '@/modules/auth/LoginPage'
-import { ForgotPasswordPage, ResetPasswordPage } from '@/modules/auth/PasswordPages'
-import { RegisterPage } from '@/modules/auth/RegisterPage'
-import { VerifyEmailPage, VerifyEmailSentPage } from '@/modules/auth/VerifyPages'
-import { DashboardPage } from '@/modules/dashboard/DashboardPage'
+import { AdminGuard, CrmCrumbs } from './layoutRoutes'
 import { RouteError } from '@/components/RouteError'
-import { CampaignEditorPage } from '@/modules/email/CampaignEditorPage'
-import { CampaignReportPage } from '@/modules/email/CampaignReportPage'
-import { CampaignsPage, EmailOverviewPage, SendersPage, TemplateEditorPage, TemplatesPage } from '@/modules/email/EmailPages'
-import { UnsubscribePage, VerifySenderPage } from '@/modules/email/PublicPages'
-import { AudienceOverviewPage } from '@/modules/audience/AudienceOverviewPage'
-import { ContactProfilePage } from '@/modules/audience/ContactProfilePage'
-import { ContactsPage } from '@/modules/audience/ContactsPage'
-import { ImportPage } from '@/modules/audience/ImportPage'
-import { SegmentBuilderPage } from '@/modules/audience/SegmentBuilderPage'
 import {
-  FieldsPage,
-  ListDetailPage,
-  ListsPage,
-  SegmentContactsPage,
-  SegmentsPage,
-  SuppressionPage,
-  TagsPage,
-} from '@/modules/audience/CollectionsPages'
-import { DevMailboxPage } from '@/modules/dev/DevMailboxPage'
-import { DevSmsOutboxPage } from '@/modules/dev/DevSmsOutboxPage'
-import { DevCallLogPage } from '@/modules/dev/DevCallLogPage'
-import { AutomationPage } from '@/modules/automation/AutomationPages'
-import { AnalyticsPage } from '@/modules/analytics/AnalyticsPage'
-import { BillingPage } from '@/modules/billing/BillingPage'
-import { AdminPage } from '@/modules/admin/AdminPage'
-import { WorkflowBuilderPage } from '@/modules/automation/WorkflowBuilderPage'
-import { VoiceCampaignEditorPage } from '@/modules/voice/VoiceCampaignEditorPage'
-import { VoiceReportPage } from '@/modules/voice/VoiceReportPage'
-import { VoiceAudioPage, VoiceCallersPage, VoiceCampaignsPage, VoiceOverviewPage } from '@/modules/voice/VoicePages'
-import { SmsCampaignEditorPage } from '@/modules/sms/SmsCampaignEditorPage'
-import { SmsReportPage } from '@/modules/sms/SmsReportPage'
-import { SmsCampaignsPage, SmsInboxPage, SmsOverviewPage, SmsRegistrationPage, SmsSendersPage, SmsTemplatesPage } from '@/modules/sms/SmsPages'
-import { AuditLogPage } from '@/modules/organizations/AuditLogPage'
-import { CreateApplicationPage, CreateOrganizationPage } from '@/modules/organizations/OnboardingPages'
-import { OrgSettingsPage } from '@/modules/organizations/OrgSettingsPage'
-import { TeamPage } from '@/modules/organizations/TeamPage'
+  AcceptInvitePage, AccountPage, AnalyticsPage, AppLayout, HomePage, MarketingLayout, PricingPage, ProductPage, LoginPage, ApplicationsPage, AppSettingsPage, AudienceOverviewPage, AuditLogPage, AutomationPage, BillingPage,
+  CampaignEditorPage, CampaignReportPage, CampaignsPage, ChatAnalyticsPage, ChatBotEditorPage, ChatBotsPage, ChatInboxPage, CompaniesPage,
+  CompanyDetailPage, ContactProfilePage, ContactsPage, CreateApplicationPage, CreateOrganizationPage, CrmSettingsPage, DashboardPage, DealDetailPage,
+  DealsPage, DevCallLogPage, DevMailboxPage, DevSmsOutboxPage, EmailOverviewPage, FieldsPage, ForgotPasswordPage, FormDetailPage, FormsPage,
+  ImportPage, LeadsPage, ListDetailPage, ListsPage, NewCampaignRoute, NewWorkflowFromLinkPage, OrgSettingsPage, RegisterPage, ReportsPage,
+  ResetPasswordPage, SegmentBuilderPage, SegmentContactsPage, SegmentsPage, SendersPage, SmsComingSoonPage,
+  SmsRegistrationPage, SuppressionPage, TagsPage, TasksPage, TeamPage,
+  TemplateEditorPage, TemplatesPage, UnsubscribePage, VerifyEmailPage, VerifyEmailSentPage, VerifySenderPage, VoiceAgentEditorPage, VoiceAgentsPage,
+  VoiceAudioPage, VoiceCampaignEditorPage, VoiceCampaignsPage, VoiceOverviewPage, VoiceReportPage, WorkflowBuilderPage,
+  SuspenseOutlet, AgentsPage, AgentDetailPage, ApprovalsPage, IntegrationsPage, DevSlackLogPage,
+} from './pages'
 
 function RequireAuth() {
   const { status } = useAuth()
@@ -83,10 +50,36 @@ function HomeRedirect() {
   return <Navigate to={`/orgs/${org.id}/applications`} replace />
 }
 
+/**
+ * The public marketing site's layout route. "/" is the home page for visitors and the workspace for people
+ * who are signed in; /welcome, /pricing and /products/* are public for everyone. The marketing chunk is
+ * not downloaded when "/" redirects a signed-in user.
+ */
+function HomeGate() {
+  const { status } = useAuth()
+  const { pathname } = useLocation()
+  if (pathname === '/') {
+    if (status === 'loading') return <FullPageSpinner />
+    if (status === 'authenticated') return <HomeRedirect />
+  }
+  return <MarketingLayout />
+}
+
 /** App-scoped pages need a resolved application. */
 function AppScoped({ children }: { children: React.ReactNode }) {
   const { app } = useWorkspace()
   return app ? <>{children}</> : <FullPageSpinner />
+}
+
+/**
+ * The old per-application billing address. Billing now lives in one place (the organization), so this
+ * opens it filtered to the application, or the application overview (with its usage card) for people
+ * who can see only this application.
+ */
+function AppBillingRedirect() {
+  const { app, org, canOrg } = useWorkspace()
+  if (!app || !org) return <FullPageSpinner />
+  return <Navigate to={canOrg('billing.read') ? `/orgs/${org.id}/billing?app=${app.id}` : `/apps/${app.id}`} replace />
 }
 
 function NotFound() {
@@ -117,18 +110,29 @@ const routes: RouteObject[] = [
   { path: '/dev/mailbox', element: <DevMailboxPage /> },
   { path: '/dev/sms', element: <DevSmsOutboxPage /> },
   { path: '/dev/calls', element: <DevCallLogPage /> },
+  { path: '/dev/slack', element: <DevSlackLogPage /> },
   { path: '/verify-sender', element: <VerifySenderPage /> },
   { path: '/unsubscribe', element: <UnsubscribePage /> },
   {
+    element: <HomeGate />,
+    children: [
+      { path: '/', element: <HomePage /> },
+      // The home page, even when signed in (preview, sharing).
+      { path: '/welcome', element: <HomePage /> },
+      { path: '/pricing', element: <PricingPage /> },
+      { path: '/products/:slug', element: <ProductPage /> },
+    ],
+  },
+  {
     element: <RequireAuth />,
     children: [
-      { path: '/', element: <HomeRedirect /> },
       { path: '/verify-email-sent', element: <VerifyEmailSentPage /> },
       { path: '/onboarding/organization', element: <CreateOrganizationPage /> },
       { path: '/onboarding/application', element: <CreateApplicationPage /> },
       {
         element: <AppLayout />,
-        children: [
+        // Pages load lazily inside the layout, so the sidebar and header stay while a page's chunk loads.
+        children: [{ element: <SuspenseOutlet />, children: [
           { path: '/apps/:appId', element: <AppScoped><DashboardPage /></AppScoped> },
           { path: '/apps/:appId/settings', element: <AppScoped><AppSettingsPage /></AppScoped> },
           { path: '/apps/:appId/audience', element: <AppScoped><AudienceOverviewPage /></AppScoped> },
@@ -147,41 +151,71 @@ const routes: RouteObject[] = [
           { path: '/apps/:appId/audience/suppression', element: <AppScoped><SuppressionPage /></AppScoped> },
           { path: '/apps/:appId/email', element: <AppScoped><EmailOverviewPage /></AppScoped> },
           { path: '/apps/:appId/email/campaigns', element: <AppScoped><CampaignsPage /></AppScoped> },
+          { path: '/apps/:appId/email/campaigns/new', element: <AppScoped><NewCampaignRoute channel="email" /></AppScoped> },
           { path: '/apps/:appId/email/campaigns/:campaignId', element: <AppScoped><CampaignReportPage /></AppScoped> },
           { path: '/apps/:appId/email/campaigns/:campaignId/edit', element: <AppScoped><CampaignEditorPage /></AppScoped> },
           { path: '/apps/:appId/email/templates', element: <AppScoped><TemplatesPage /></AppScoped> },
           { path: '/apps/:appId/email/templates/:templateId', element: <AppScoped><TemplateEditorPage /></AppScoped> },
           { path: '/apps/:appId/email/senders', element: <AppScoped><SendersPage /></AppScoped> },
-          { path: '/apps/:appId/sms', element: <AppScoped><SmsOverviewPage /></AppScoped> },
-          { path: '/apps/:appId/sms/campaigns', element: <AppScoped><SmsCampaignsPage /></AppScoped> },
-          { path: '/apps/:appId/sms/campaigns/:campaignId', element: <AppScoped><SmsReportPage /></AppScoped> },
-          { path: '/apps/:appId/sms/campaigns/:campaignId/edit', element: <AppScoped><SmsCampaignEditorPage /></AppScoped> },
-          { path: '/apps/:appId/sms/templates', element: <AppScoped><SmsTemplatesPage /></AppScoped> },
-          { path: '/apps/:appId/sms/senders', element: <AppScoped><SmsSendersPage /></AppScoped> },
-          { path: '/apps/:appId/sms/registration', element: <AppScoped><SmsRegistrationPage /></AppScoped> },
-          { path: '/apps/:appId/sms/inbox', element: <AppScoped><SmsInboxPage /></AppScoped> },
+          // SMS is coming soon in every market: every SMS route shows one coming-soon page.
+          { path: '/apps/:appId/sms', element: <AppScoped><SmsComingSoonPage /></AppScoped> },
+          { path: '/apps/:appId/sms/*', element: <AppScoped><SmsComingSoonPage /></AppScoped> },
           { path: '/apps/:appId/voice', element: <AppScoped><VoiceOverviewPage /></AppScoped> },
           { path: '/apps/:appId/voice/campaigns', element: <AppScoped><VoiceCampaignsPage /></AppScoped> },
+          { path: '/apps/:appId/voice/campaigns/new', element: <AppScoped><NewCampaignRoute channel="voice" /></AppScoped> },
           { path: '/apps/:appId/voice/campaigns/:campaignId', element: <AppScoped><VoiceReportPage /></AppScoped> },
           { path: '/apps/:appId/voice/campaigns/:campaignId/edit', element: <AppScoped><VoiceCampaignEditorPage /></AppScoped> },
           { path: '/apps/:appId/voice/audio', element: <AppScoped><VoiceAudioPage /></AppScoped> },
-          { path: '/apps/:appId/voice/callers', element: <AppScoped><VoiceCallersPage /></AppScoped> },
+          // Signalcraft picks caller numbers automatically; the old number pages lead to the voice overview.
+          { path: '/apps/:appId/voice/numbers', element: <Navigate to=".." relative="path" replace /> },
+          { path: '/apps/:appId/voice/callers', element: <Navigate to=".." relative="path" replace /> },
+          { path: '/apps/:appId/voice/agents', element: <AppScoped><VoiceAgentsPage /></AppScoped> },
+          { path: '/apps/:appId/voice/agents/:agentId', element: <AppScoped><VoiceAgentEditorPage /></AppScoped> },
+          { path: '/apps/:appId/voice/registration', element: <AppScoped><SmsRegistrationPage channel="voice" /></AppScoped> },
+          { path: '/apps/:appId/forms', element: <AppScoped><FormsPage /></AppScoped> },
+          { path: '/apps/:appId/forms/:formId', element: <AppScoped><FormDetailPage /></AppScoped> },
+          { path: '/apps/:appId/chat', element: <AppScoped><ChatAnalyticsPage /></AppScoped> },
+          { path: '/apps/:appId/chat/inbox', element: <AppScoped><ChatInboxPage /></AppScoped> },
+          { path: '/apps/:appId/chat/bots', element: <AppScoped><ChatBotsPage /></AppScoped> },
+          { path: '/apps/:appId/chat/bots/:botId', element: <AppScoped><ChatBotEditorPage /></AppScoped> },
           { path: '/apps/:appId/automation', element: <AppScoped><AutomationPage /></AppScoped> },
           { path: '/apps/:appId/analytics', element: <AppScoped><AnalyticsPage /></AppScoped> },
-          { path: '/apps/:appId/billing', element: <AppScoped><BillingPage scope="app" /></AppScoped> },
+          { path: '/apps/:appId/billing', element: <AppBillingRedirect /> },
+          { path: '/apps/:appId/automation/new', element: <AppScoped><NewWorkflowFromLinkPage /></AppScoped> },
           { path: '/apps/:appId/automation/:workflowId', element: <AppScoped><WorkflowBuilderPage /></AppScoped> },
+          { path: '/apps/:appId/ai', element: <Navigate to="agents" replace /> },
+          { path: '/apps/:appId/ai/agents', element: <AppScoped><AgentsPage /></AppScoped> },
+          { path: '/apps/:appId/ai/agents/:agentId', element: <AppScoped><AgentDetailPage /></AppScoped> },
+          { path: '/apps/:appId/ai/approvals', element: <AppScoped><ApprovalsPage /></AppScoped> },
+          { path: '/apps/:appId/ai/integrations', element: <AppScoped><IntegrationsPage /></AppScoped> },
+          { path: '/apps/:appId/crm', element: <Navigate to="deals" replace /> },
+          {
+            element: <CrmCrumbs />,
+            children: [
+              { path: '/apps/:appId/crm/deals', element: <AppScoped><DealsPage /></AppScoped> },
+              { path: '/apps/:appId/crm/deals/:dealId', element: <AppScoped><DealDetailPage /></AppScoped> },
+              { path: '/apps/:appId/crm/leads', element: <AppScoped><LeadsPage /></AppScoped> },
+              { path: '/apps/:appId/crm/companies', element: <AppScoped><CompaniesPage /></AppScoped> },
+              { path: '/apps/:appId/crm/companies/:companyId', element: <AppScoped><CompanyDetailPage /></AppScoped> },
+              { path: '/apps/:appId/crm/tasks', element: <AppScoped><TasksPage /></AppScoped> },
+              { path: '/apps/:appId/crm/reports', element: <AppScoped><ReportsPage /></AppScoped> },
+              { path: '/apps/:appId/crm/settings', element: <AppScoped><CrmSettingsPage /></AppScoped> },
+            ],
+          },
           { path: '/orgs/:orgId/applications', element: <ApplicationsPage /> },
           { path: '/orgs/:orgId/team', element: <TeamPage /> },
           { path: '/orgs/:orgId/settings', element: <OrgSettingsPage /> },
           { path: '/orgs/:orgId/audit-log', element: <AuditLogPage /> },
-          { path: '/orgs/:orgId/billing', element: <BillingPage scope="org" /> },
+          { path: '/orgs/:orgId/billing', element: <BillingPage /> },
           { path: '/account', element: <AccountPage /> },
-          { path: '/admin', element: <AdminPage /> },
-        ],
+          { path: '/admin', element: <AdminGuard /> },
+        ] }],
       },
     ],
   },
   { path: '*', element: <NotFound /> },
 ]
 
-export const router = createBrowserRouter([{ errorElement: <RouteError />, children: routes }])
+// The outer Suspense covers pages outside the app layout (sign-in, onboarding, public pages). A chunk that
+// fails to load throws to RouteError like any other route error.
+export const router = createBrowserRouter([{ errorElement: <RouteError />, element: <SuspenseOutlet />, children: routes }])

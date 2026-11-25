@@ -45,7 +45,7 @@ export function CreateOrganizationPage() {
   const orgs = useOrganizations()
   const { register, handleSubmit, formState, setError } = useForm<z.infer<typeof orgSchema>>({
     resolver: zodResolver(orgSchema),
-    defaultValues: { country: ['IN', 'US'].includes(browserCountry() ?? '') ? browserCountry()! : 'IN' },
+    defaultValues: { country: ['IN', 'AE', 'US'].includes(browserCountry() ?? '') ? browserCountry()! : 'IN' },
   })
 
   if (user && !user.email_verified) return <Navigate to="/verify-email-sent" replace />
@@ -76,20 +76,20 @@ export function CreateOrganizationPage() {
           label="Primary market"
           htmlFor="org-country"
           error={formState.errors.country?.message}
-          hint="Sets defaults for phone numbers, timezones, date formats and compliance rules (TRAI DLT in India; TCPA and CAN-SPAM in the US)."
+          hint="Sets your wallet currency and the defaults for phone numbers, timezones, date formats and compliance rules (TRAI DLT in India; TDRA rules and an AED wallet for VAT-registered businesses in the UAE; TCPA and CAN-SPAM in the US)."
         >
           <Select id="org-country" {...register('country')}>
             <optgroup label="Fully supported">
               {PRIMARY_COUNTRIES.map((c) => (
                 <option key={c.code} value={c.code}>
-                  {c.flag} {c.name}
+                  {c.name}
                 </option>
               ))}
             </optgroup>
             <optgroup label="Other (strictest defaults)">
               {OTHER_COUNTRIES.map((c) => (
                 <option key={c.code} value={c.code}>
-                  {c.flag} {c.name}
+                  {c.name}
                 </option>
               ))}
             </optgroup>
@@ -137,7 +137,7 @@ export function CreateApplicationPage() {
   return (
     <AuthLayout
       title={first ? 'Create your first application' : `New application in ${org.name}`}
-      subtitle="Each application has its own contacts, campaigns, analytics and settings."
+      subtitle="An application is one brand or product with its own contacts, campaigns and settings. You can add more later."
     >
       {first && <Steps step={2} />}
       {!org.permissions.includes('apps.create') ? (
@@ -145,6 +145,7 @@ export function CreateApplicationPage() {
       ) : (
         <ApplicationForm
           defaultValues={{ default_country: org.country ?? browserCountry() ?? 'IN' }}
+          compactTimezone
           submitLabel="Create application"
           onSubmit={async (values) => {
             const app = await appApi.create({ ...values, organization_id: org.id })
