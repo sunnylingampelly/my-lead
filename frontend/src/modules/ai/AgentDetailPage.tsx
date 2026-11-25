@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { AgentEditor } from './AgentEditor'
 import { SimulatedNotice } from './AgentsPage'
 import { FlowChips, RunStatus, RunTimeline, Switch } from './components'
+import { formatMoney } from '../sms/format'
 import { Markdown } from './Markdown'
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—')
@@ -167,6 +168,7 @@ export function AgentDetailPage() {
                           <span className="tabular-nums text-muted-foreground">{when(r.created_at)}</span>
                           <span className="ml-auto">
                             <RunStatus run={r} />
+                            {r.charge && <span className="ml-1 text-xs tabular-nums text-muted-foreground">{formatMoney(r.charge.amount, r.charge.currency)}</span>}
                           </span>
                         </span>
                         <span className="text-xs text-muted-foreground">{r.trigger_key.startsWith('manual') ? 'Run by hand' : r.trigger_key.startsWith('schedule') ? 'Scheduled' : String(r.trigger.event ?? 'Event').replace(/_/g, ' ')}</span>
@@ -192,7 +194,10 @@ export function AgentDetailPage() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <RunStatus run={run.data} />
                   <span className="text-muted-foreground">{when(run.data.created_at)}</span>
-                  {run.data.input_tokens + run.data.output_tokens > 0 && <span className="ml-auto text-xs tabular-nums text-muted-foreground">{run.data.input_tokens + run.data.output_tokens} tokens</span>}
+                  <span className="ml-auto text-xs tabular-nums text-muted-foreground" data-testid="run-cost">
+                    {run.data.input_tokens + run.data.output_tokens > 0 && `${run.data.input_tokens + run.data.output_tokens} tokens · `}
+                    {run.data.simulated ? 'Simulated, no charge' : run.data.dry_run ? 'Test run, no charge' : run.data.charge ? `Cost ${formatMoney(run.data.charge.amount, run.data.charge.currency)}` : run.data.status === 'completed' ? 'No charge' : ''}
+                  </span>
                 </div>
                 {run.data.error && <p className="rounded-md border border-danger-border bg-danger-soft px-3 py-2 text-sm text-danger-strong">{run.data.error}</p>}
                 <RunTimeline steps={run.data.steps} />

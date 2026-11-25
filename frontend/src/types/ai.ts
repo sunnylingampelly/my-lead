@@ -35,7 +35,24 @@ export interface AssistantMessage {
   links: AiLink[]
   tools: { name: string; ok: boolean; summary?: string }[]
   simulated: boolean
+  /** What this reply cost from the wallet (metered AI), or null (simulated, nothing billable). */
+  charge: Money | null
+  model: string | null
   created_at: string
+}
+
+export interface Money {
+  amount: number
+  currency: string
+}
+
+export interface AiPrices {
+  currency: string
+  ai_assistant_message_from: number
+  ai_assistant_message_typical: number
+  ai_agent_run_from: number
+  ai_agent_run_typical: number
+  ai_markup: number
 }
 
 export interface Conversation {
@@ -83,6 +100,7 @@ export interface AiStatus {
   pending_approvals: number
   can_manage: boolean
   slack: SlackStatus
+  pricing?: AiPrices
 }
 
 export interface SlackChannel {
@@ -156,6 +174,11 @@ export interface AgentRun {
   attempts: number
   input_tokens: number
   output_tokens: number
+  cached_tokens?: number
+  models?: string[]
+  cost_usd?: number
+  /** The wallet charge for this run (null for dry runs, simulation and runs that didn't finish). */
+  charge?: Money | null
   created_at: string
   started_at: string | null
   finished_at: string | null
@@ -174,6 +197,7 @@ export interface RunStep {
   action_status: string | null
   input_tokens: number
   output_tokens: number
+  model?: string | null
   at: string
 }
 

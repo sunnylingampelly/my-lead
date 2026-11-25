@@ -661,17 +661,21 @@ export const PRODUCTS: Product[] = [
       { title: 'Every action is logged', text: 'Everything done through the AI is recorded in the audit log as done via the AI Assistant or a named agent.' },
     ],
     pricing: {
-      limits: [
-        { key: 'ai_assistant_messages_per_day', label: 'AI Assistant messages a day' },
-        { key: 'ai_agent_runs_per_day', label: 'AI agent runs a day' },
+      rates: [
+        { key: 'ai_assistant_message_typical', label: 'AI Assistant', unit: 'typical simple question (metered)' },
+        { key: 'ai_agent_run_typical', label: 'AI agent run', unit: 'typical run (metered)' },
       ],
-      note: 'Included on both plans with fair-use daily limits. Emails and calls the AI prepares are charged at the normal rates when you send them.',
+      limits: [
+        { key: 'ai_assistant_messages_per_day', label: 'Fair-use limit: assistant messages a day' },
+        { key: 'ai_agent_runs_per_day', label: 'Fair-use limit: agent runs a day' },
+      ],
+      note: 'Pay per use from your wallet on both plans: metered at about 3× the AI model’s cost, with a small minimum per reply or run, and the charge is shown on every reply. Test runs are free. Emails and calls the AI prepares are charged at the normal rates when you send them.',
     },
     faq: [
       { q: 'Does the AI send emails or launch campaigns on its own?', a: 'No. It can draft an email campaign, but sending, launching and scheduling are always done by you.' },
       { q: 'Which AI does the AI Team use?', a: 'The AI Team runs on OpenAI models, called without asking the provider to store your data between requests.' },
       { q: 'Do I need Slack?', a: 'No. Agents can report in the app and by email. Slack adds channel posts and Approve / Reject buttons.' },
-      { q: 'What does it cost?', a: 'It is included on Starter and Pro, up to a fair-use number of assistant messages and agent runs a day. Anything the AI prepares that costs money, like sending an email, is charged as usual when it is sent.' },
+      { q: 'What does it cost?', a: 'It is pay per use from your wallet on Starter and Pro: each assistant reply and agent run is metered at about 3× the AI model’s cost, with a small minimum, and the charge is shown on the reply or run. Pro’s discount applies. Test runs are free, and anything the AI prepares that costs money, like sending an email, is charged as usual when it is sent.' },
     ],
   },
 ]

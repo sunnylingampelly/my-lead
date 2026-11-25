@@ -59,9 +59,9 @@ export function ProductPricing({ product }: { product: Product }) {
                       {r.key.startsWith('voice') && channelSoon(d, 'voice') && ' · coming soon in the UAE'}
                     </span>
                   </th>
-                  <td className="px-4 py-4 tabular-nums">{d ? money(d.rates[r.key], currency) : <span className="inline-block h-4 w-14 animate-pulse rounded bg-muted" />}</td>
+                  <td className="px-4 py-4 tabular-nums">{d ? `${r.key.endsWith('_typical') ? '≈ ' : ''}${money(d.rates[r.key], currency)}` : <span className="inline-block h-4 w-14 animate-pulse rounded bg-muted" />}</td>
                   <td className="px-4 py-4 font-semibold tabular-nums text-primary sm:pr-8">
-                    {d && pro ? money(discounted(d.rates[r.key], pro.usage_discount), currency) : <span className="inline-block h-4 w-14 animate-pulse rounded bg-muted" />}
+                    {d && pro ? `${r.key.endsWith('_typical') ? '≈ ' : ''}${money(discounted(d.rates[r.key], pro.usage_discount), currency)}` : <span className="inline-block h-4 w-14 animate-pulse rounded bg-muted" />}
                   </td>
                 </tr>
               ))}

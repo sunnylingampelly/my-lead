@@ -31,6 +31,14 @@ const BILLING_FAQ = [
     a: 'You add credit to a prepaid wallet in your currency, and every email, call minute and AI reply is charged from it as you use it (SMS is coming soon). The Pro monthly fee is charged from the same wallet. There are no contracts and no per-contact fees.',
   },
   {
+    q: 'How is AI billed?',
+    a: 'AI chatbot replies and AI calls have the fixed rates above. The AI Assistant and AI agents are metered from your wallet: about 3× what the AI model costs us for that reply or run, with a small minimum, and the charge is shown on every reply and every run. A simple question typically costs a few cents (or a few rupees); test runs and simulation mode are free. Pro’s discount applies to AI too, and fair-use daily limits stop runaway usage.',
+  },
+  {
+    q: 'Is there a minimum top-up?',
+    a: 'Yes: online top-ups start at ₹500 in India, AED 50 in the UAE and $10 elsewhere.',
+  },
+  {
     q: 'Do I get a GST tax invoice?',
     a: 'Yes. In India every wallet top-up gets a GST tax invoice with your GSTIN, split into CGST and SGST or IGST depending on your state. GST is added when you top up.',
   },

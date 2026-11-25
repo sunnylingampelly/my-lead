@@ -63,10 +63,25 @@ def summary(db: Session, ctx, application_id: str | None = None) -> dict:
         "holds": [{"id": h.id, "description": h.description, "amount": float(h.amount),
                    "created_at": h.created_at.isoformat(), "application_id": h.application_id} for h in holds],
         "pricing": pricing(w.currency),
+        # AI Team is metered (provider cost x markup, with a minimum); typical charges help people budget.
+        "ai_pricing": _ai_pricing(w.currency),
+        "topup": _topup(w.currency),
         "plan": subscriptions.brief(db, ctx.organization_id),
         "test_mode": settings.COMMUNICATION_MODE != "live",
         "can_manage": ctx.has(Perm.BILLING_MANAGE),
     }
+
+
+def _ai_pricing(currency: str) -> dict:
+    from app.services.ai_team.metering import typical
+
+    return typical(currency)
+
+
+def _topup(currency: str) -> dict:
+    from app.services.billing.payments import availability
+
+    return availability(currency)
 
 
 def pricing(wallet_currency: str) -> list[dict]:
@@ -77,12 +92,14 @@ def pricing(wallet_currency: str) -> list[dict]:
         s = settings.SMS_PRICING[country]
         v = settings.VOICE_PRICING[country]
         c = settings.CHAT_AI_PRICING.get(country) or settings.CHAT_AI_PRICING["default"]
+        va = settings.VOICE_AI_PRICING.get(country) or settings.VOICE_AI_PRICING["default"]
         rows.append({"country": country,
                      "chat_reply": float(wl.convert(c["per_reply"], c["currency"], wallet_currency)),
                      "email": float(wl.convert(e["per_email"], e["currency"], wallet_currency)),
                      "sms_promotional": float(wl.convert(s["promotional"], s["currency"], wallet_currency)),
                      "sms_transactional": float(wl.convert(s["transactional"], s["currency"], wallet_currency)),
-                     "voice_minute": float(wl.convert(v["per_minute"], v["currency"], wallet_currency))})
+                     "voice_minute": float(wl.convert(v["per_minute"], v["currency"], wallet_currency)),
+                     "voice_ai_minute": float(wl.convert(va["per_minute"], va["currency"], wallet_currency))})
     return rows
 
 

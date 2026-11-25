@@ -28,7 +28,18 @@ export type LimitKey =
   | 'voice_agents'
   | 'ai_assistant_messages_per_day'
   | 'ai_agent_runs_per_day'
-export type RateKey = 'email' | 'sms_promotional' | 'sms_transactional' | 'voice_minute' | 'voice_ai_minute' | 'chat_reply'
+export type RateKey =
+  | 'email'
+  | 'sms_promotional'
+  | 'sms_transactional'
+  | 'voice_minute'
+  | 'voice_ai_minute'
+  | 'chat_reply'
+  // AI Team is metered (about 3x the AI model's cost) with a minimum per reply/run; "typical" helps budgeting.
+  | 'ai_assistant_message_from'
+  | 'ai_assistant_message_typical'
+  | 'ai_agent_run_from'
+  | 'ai_agent_run_typical'
 
 export interface PublicPlan {
   key: string
@@ -50,7 +61,9 @@ export interface PublicPricing {
   /** Channels open in this market; UAE SMS and calls are "coming soon". */
   channels?: { sms: boolean; voice: boolean }
   plans: PublicPlan[]
-  rates: Record<RateKey, number>
+  rates: Record<RateKey, number> & { ai_markup?: number }
+  /** Smallest online top-up in this currency. */
+  topup_min?: number
 }
 
 export function guessCurrency(): Currency {
@@ -146,6 +159,9 @@ export interface Volumes {
   voiceMinutes: number
   aiMinutes: number
   chatReplies: number
+  /** AI Assistant questions and AI agent runs, at typical metered prices. */
+  aiQuestions: number
+  agentRuns: number
 }
 
 export type SmsKind = 'promotional' | 'transactional'
@@ -159,7 +175,13 @@ export type SmsKind = 'promotional' | 'transactional'
 export function usageAtListRates(v: Volumes, rates: Record<RateKey, number>, sms: SmsKind = 'promotional') {
   const smsRate = sms === 'promotional' ? rates.sms_promotional : rates.sms_transactional
   return tidy(
-    v.emails * rates.email + v.sms * smsRate + v.voiceMinutes * rates.voice_minute + v.aiMinutes * rates.voice_ai_minute + v.chatReplies * rates.chat_reply,
+    v.emails * rates.email +
+      v.sms * smsRate +
+      v.voiceMinutes * rates.voice_minute +
+      v.aiMinutes * rates.voice_ai_minute +
+      v.chatReplies * rates.chat_reply +
+      (v.aiQuestions ?? 0) * (rates.ai_assistant_message_typical ?? 0) +
+      (v.agentRuns ?? 0) * (rates.ai_agent_run_typical ?? 0),
   )
 }
 

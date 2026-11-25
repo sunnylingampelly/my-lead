@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Bot, Hash as Slack, Plus, Sparkles, Wand2 } from 'lucide-react'
+import { Bot, Plus, Sparkles, Wand2 } from 'lucide-react'
+import { SlackLogo as Slack } from '@/components/SlackLogo'
 import { aiApi, aiqk, useAgents, useAgentTemplates, useAiStatus } from '@/api/ai'
 import { errorMessage } from '@/api/client'
 import { EmptyState, ErrorState, LoadingRows, PageHeader } from '@/components/page'
@@ -114,7 +115,7 @@ export function AgentsPage() {
       {status.data?.simulated && <SimulatedNotice />}
       {status.data && !status.data.slack.connected && canManage && (
         <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border bg-card px-4 py-3 text-sm">
-          <Slack className="size-4 text-primary" />
+          <Slack className="size-4" />
           <span className="flex-1">Connect Slack to post agent reports and approve actions from a channel.</span>
           <Button asChild size="sm" variant="outline">
             <Link to={`/apps/${appId}/ai/integrations`}>Connect Slack</Link>

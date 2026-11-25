@@ -112,7 +112,7 @@ export function RunTimeline({ steps }: { steps: RunStep[] }) {
             )}
             {(s.input_tokens > 0 || s.output_tokens > 0) && (
               <div className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
-                {s.input_tokens + s.output_tokens} tokens
+                {s.input_tokens + s.output_tokens} tokens{s.model ? ` · ${s.model}` : ''}
               </div>
             )}
           </li>

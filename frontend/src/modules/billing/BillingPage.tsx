@@ -247,7 +247,7 @@ function PlanSection({ orgId, onAddCredit }: { orgId: string; onAddCredit: (() =
     </section>
   )
 }
-const CHANNEL_LABEL: Record<string, string> = { email: 'Email', sms: 'SMS', voice: 'Voice', chat: 'Chatbot' }
+const CHANNEL_LABEL: Record<string, string> = { email: 'Email', sms: 'SMS', voice: 'Voice', chat: 'Chatbot', ai: 'AI' }
 
 function TopUpDialog({ scope, currency, open, onOpenChange }: { scope: BillingScope; currency: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const qc = useQueryClient()
@@ -382,6 +382,11 @@ function Transactions({ scope, currency, appName }: { scope: BillingScope; curre
                     <div className="text-sm">{t.description}</div>
                     {t.type === 'subscription' && t.meta.period_end && <div className="text-xs text-muted-foreground">Monthly plan fee · renews {formatDate(t.meta.period_end)}</div>}
                     {t.type === 'recurring' && <div className="text-xs text-muted-foreground">Monthly fee{t.meta.original_currency && t.meta.original_currency !== currency ? ` · ${formatMoney(t.meta.original_amount, t.meta.original_currency)} converted` : ''}</div>}
+                    {t.channel === 'ai' && t.meta.models && (
+                      <div className="text-xs text-muted-foreground" data-testid="tx-ai-meta">
+                        Metered · {t.meta.models.join(', ')} · {(t.meta.input_tokens ?? 0) + (t.meta.output_tokens ?? 0)} tokens
+                      </div>
+                    )}
                     {t.meta.units !== undefined && (
                       <div className="text-xs text-muted-foreground">
                         {t.meta.units} {t.channel === 'voice' ? 'calls charged' : t.channel === 'sms' ? 'texts' : 'emails'}
@@ -434,7 +439,7 @@ function PayDialog({ scope, currency, min, max, provider, open, onOpenChange, on
             </Button>
           ))}
         </div>
-        <Field label={`Amount (${currency})`} htmlFor="pay-amount" hint={`Between ${formatMoney(min, currency)} and ${formatMoney(max, currency)}.`}>
+        <Field label={`Amount (${currency})`} htmlFor="pay-amount" hint={`Minimum top-up ${formatMoney(min, currency)}; up to ${formatMoney(max, currency)} per payment.`}>
           <Input id="pay-amount" type="number" min={min} max={max} value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
         {n >= min && n <= max && (
@@ -718,6 +723,7 @@ export function BillingPage() {
                   <TH className="text-right">SMS (promotional, per part)</TH>
                   <TH className="text-right">SMS (transactional, per part)</TH>
                   <TH className="text-right">Voice (per started minute)</TH>
+                  <TH className="text-right">AI voice agent (per minute)</TH>
                   <TH className="text-right">Chatbot (per AI reply)</TH>
                 </TR>
               </THead>
@@ -734,11 +740,28 @@ export function BillingPage() {
                     <TD className="text-right text-muted-foreground">Coming soon</TD>
                     <TD className="text-right text-muted-foreground">Coming soon</TD>
                     <TD className="text-right tabular-nums">{formatMoney(p.voice_minute, cur)}</TD>
+                    <TD className="text-right tabular-nums">{p.voice_ai_minute != null ? formatMoney(p.voice_ai_minute, cur) : '—'}</TD>
                     <TD className="text-right tabular-nums">{p.chat_reply != null ? formatMoney(p.chat_reply, cur) : '—'}</TD>
                   </TR>
                 ))}
               </TBody>
             </Table>
+            <dl className="grid gap-x-6 gap-y-3 border-t px-5 py-4 text-sm sm:grid-cols-2" data-testid="ai-prices">
+              {s.ai_pricing && (
+                <div>
+                  <dt className="font-medium">AI Assistant and AI agents</dt>
+                  <dd className="text-muted-foreground">
+                    Metered at about {s.ai_pricing.ai_markup}× the AI model’s cost, at least {formatMoney(s.ai_pricing.ai_assistant_message_from, cur)} per reply or run: ≈ {formatMoney(s.ai_pricing.ai_assistant_message_typical, cur)} per simple question, ≈ {formatMoney(s.ai_pricing.ai_agent_run_typical, cur)} per typical agent run. The charge is shown on every reply and run.
+                  </dd>
+                </div>
+              )}
+              {s.topup && (
+                <div>
+                  <dt className="font-medium">Minimum top-up</dt>
+                  <dd className="text-muted-foreground">{formatMoney(s.topup.min, cur)} per online payment</dd>
+                </div>
+              )}
+            </dl>
           </Card>
           <Tabs value={tab} onValueChange={setTab} id="billing-tabs" className="scroll-mt-20">
             <div className="-mx-1 overflow-x-auto px-1">

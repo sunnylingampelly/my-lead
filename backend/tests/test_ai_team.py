@@ -27,7 +27,7 @@ from app.services.chat import fetch
 from app.services.crm.common import record_event
 from app.services.tenancy import resolve_app_context
 from app.utils.time import utcnow
-from tests.conftest import invite_and_join
+from tests.conftest import invite_and_join, make_pro
 
 # ------------------------------------------------------------------ helpers
 
@@ -242,7 +242,7 @@ def test_assistant_stream_answers_with_links_and_history(ai):
     assert "Acme renewal" in text and f"/apps/{a.app_id}/crm/deals/{d['id']}" in text
     done = first(evs, "done")
     assert any(link["href"] == f"/apps/{a.app_id}/crm/deals/{d['id']}" for link in done["message"]["links"])
-    assert done["usage"]["assistant_messages"]["used"] == 1 and done["usage"]["assistant_messages"]["limit"] == 50
+    assert done["usage"]["assistant_messages"]["used"] == 1 and done["usage"]["assistant_messages"]["limit"] == 200
     convs = a.get(f"{a.ai}/conversations").json()
     assert len(convs) == 1 and convs[0]["title"] == "Which deals are stale?" and convs[0]["message_count"] == 2
     # Conversations are private to their user.
@@ -254,18 +254,18 @@ def test_assistant_stream_answers_with_links_and_history(ai):
 def test_daily_limits(ai):
     a = ai
     with SessionLocal() as db:
-        db.add(AiUsageCounter(organization_id=a.org["id"], day=usage.today(), kind=usage.ASSISTANT, count=50))
+        db.add(AiUsageCounter(organization_id=a.org["id"], day=usage.today(), kind=usage.ASSISTANT, count=200))
         db.commit()
     r, _ = ask(a, "How did we do this week?")
     assert r.status_code == 422 and r.json()["error"]["code"] == "AI_DAILY_LIMIT"
-    assert "50 AI Assistant messages" in r.json()["error"]["message"] and "Pro" in r.json()["error"]["message"]
+    assert "200 AI Assistant messages" in r.json()["error"]["message"] and "Pro" in r.json()["error"]["message"]
     st = a.get(f"{a.ai}/status").json()
-    assert st["usage"]["assistant_messages"] == {"used": 50, "limit": 50} and st["simulated"]
+    assert st["usage"]["assistant_messages"] == {"used": 200, "limit": 200} and st["simulated"]
     # Agent runs: the limit marks event runs as skipped (visible to the owner) instead of running them.
     connect_sim_slack(a)
     ag = create_agent(a, "daily_report")
     with SessionLocal() as db:
-        db.add(AiUsageCounter(organization_id=a.org["id"], day=usage.today(), kind=usage.AGENT_RUNS, count=100))
+        db.add(AiUsageCounter(organization_id=a.org["id"], day=usage.today(), kind=usage.AGENT_RUNS, count=300))
         db.commit()
     r = a.post(f"{a.ai}/agents/{ag['id']}/run", json={})
     assert r.status_code == 422 and r.json()["error"]["code"] == "AI_DAILY_LIMIT"
@@ -275,12 +275,14 @@ def test_daily_limits(ai):
         db.commit()
     tick()
     runs = a.get(f"{a.ai}/agents/{ag['id']}/runs").json()
-    assert runs[0]["status"] == "skipped" and "100 AI agent runs" in runs[0]["error"]
+    assert runs[0]["status"] == "skipped" and "300 AI agent runs" in runs[0]["error"]
     # Plans carry the limits.
     from app.services.billing.plans import PLANS
 
-    assert PLANS["starter"]["limits"]["ai_assistant_messages_per_day"] == 50
-    assert PLANS["pro"]["limits"]["ai_agent_runs_per_day"] == 2000
+    assert PLANS["starter"]["limits"]["ai_assistant_messages_per_day"] == 200
+    assert PLANS["starter"]["limits"]["ai_agent_runs_per_day"] == 300
+    assert PLANS["pro"]["limits"]["ai_assistant_messages_per_day"] == 2000
+    assert PLANS["pro"]["limits"]["ai_agent_runs_per_day"] == 5000
 
 
 # ------------------------------------------------------------------ agents
@@ -642,7 +644,7 @@ def call(name: str, args: dict, cid: str = "call_1") -> dict:
 def test_openai_request_uses_configured_model_and_declares_tools(ai, monkeypatch):
     a = ai
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(settings, "OPENAI_MODEL", "gpt-test-model")
+    monkeypatch.setattr(settings, "OPENAI_MODEL_FAST", "gpt-test-model")
     fake = FakeOpenAI([[call("crm_tasks", {"due": "today"})], [say("You have no tasks due today.")]])
     monkeypatch.setattr(llm, "_client_override", fake)
     r, evs = ask(a, "What's due today?", page={"path": f"/apps/{a.app_id}/crm/tasks"})
@@ -739,7 +741,7 @@ def test_agent_crud_validation_catalog_and_run_now_approval(ai):
     assert a.get(f"{a.ai}/status").json()["pending_approvals"] == 1
     # Today's AI use shows on the billing plan's meters.
     plan = a.get(f"/organizations/{a.org['id']}/billing/plan").json()
-    assert plan["limits"]["ai_agent_runs_per_day"] == 100 and plan["usage"]["ai_agent_runs_per_day"] == 1
+    assert plan["limits"]["ai_agent_runs_per_day"] == 300 and plan["usage"]["ai_agent_runs_per_day"] == 1
 
 
 def test_describe_agent_draft_in_simulation(ai):
@@ -753,3 +755,243 @@ def test_describe_agent_draft_in_simulation(ai):
     assert out["status"] == "executed"
     agents = a.get(f"{a.ai}/agents").json()
     assert len(agents) == 1 and agents[0]["template"] == "daily_report" and agents[0]["enabled"] is False
+
+
+# ------------------------------------------------------------------ routing and metered wallet charging
+
+
+class MeteredOpenAI(FakeOpenAI):
+    """Scripted responses with per-call token usage: each script entry is (output items, (input, cached, output))."""
+
+    def __init__(self, script):
+        super().__init__([out for out, _ in script])
+        self.usages = [u for _, u in script]
+
+    def create(self, **kw):
+        inp, cached, out = self.usages[len(self.requests)]
+        resp = super().create(**kw)
+        u = SimpleNamespace(input_tokens=inp, output_tokens=out, input_tokens_details=SimpleNamespace(cached_tokens=cached))
+        if kw.get("stream"):
+            events = list(resp)
+            events[-1].response.usage = u
+            return iter(events)
+        resp.usage = u
+        return resp
+
+
+@pytest.fixture
+def live_ai(monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(settings, "OPENAI_MODEL", "gpt-6.2-astra")
+    monkeypatch.setattr(settings, "OPENAI_MODEL_FAST", "gpt-6-luna")
+
+    def install(script):
+        fake = MeteredOpenAI(script)
+        monkeypatch.setattr(llm, "_client_override", fake)
+        return fake
+
+    return install
+
+
+def ai_txs(org_id: str) -> list:
+    from app.models.billing import WalletTransaction
+
+    with SessionLocal() as db:
+        return list(db.scalars(select(WalletTransaction).where(WalletTransaction.organization_id == org_id,
+                                                               WalletTransaction.channel == "ai")
+                               .order_by(WalletTransaction.created_at)))
+
+
+def set_wallet(org_id: str, amount: str) -> None:
+    from decimal import Decimal
+
+    from app.services.billing import wallet as wl
+
+    with SessionLocal() as db:
+        w = wl.get_wallet(db, org_id)
+        wl.post(db, w, "adjustment", Decimal(amount) - wl.dec(w.balance), description="Test adjustment",
+                idempotency_key=f"adj:{amount}:{utcnow().timestamp()}")
+        db.commit()
+
+
+def test_routing_picks_the_fast_model_for_lookups_and_the_flagship_for_building(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from app.services.ai_team import routing
+
+    monkeypatch.setattr(settings, "OPENAI_MODEL", "gpt-6.2-astra")
+    monkeypatch.setattr(settings, "OPENAI_MODEL_FAST", "gpt-6-luna")
+    assert routing.assistant_model("Which deals are stale?", 0) == "gpt-6-luna"
+    assert routing.assistant_model("What's due today?", 1) == "gpt-6-luna"
+    assert routing.assistant_model("What's due today?", 2) == "gpt-6.2-astra"  # third tool round: multi-step
+    assert routing.assistant_model("Build a workflow that follows up form leads", 0) == "gpt-6.2-astra"
+    assert routing.assistant_model("Set up an agent for daily reports", 0) == "gpt-6.2-astra"
+    assert routing.assistant_model("Show my tasks", 0, retry=True) == "gpt-6.2-astra"
+    assert routing.agent_model(NS(template="lead_qualifier", allowed_tools=[]), 0) == "gpt-6.2-astra"
+    assert routing.agent_model(NS(template="chat_followup", allowed_tools=[]), 0) == "gpt-6.2-astra"
+    assert routing.agent_model(NS(template="daily_report", allowed_tools=[]), 0) == "gpt-6-luna"
+    assert routing.agent_model(NS(template=None, allowed_tools=["crm_tasks"]), 0) == "gpt-6-luna"
+    assert routing.agent_model(NS(template=None, allowed_tools=["create_task"]), 0) == "gpt-6.2-astra"
+
+
+def test_metered_charge_fast_lookup_minimum_flagship_build_and_pro_discount(ai, live_ai):
+    from app.services.ai_team.metering import call_cost
+
+    a = ai
+    a.get(f"/organizations/{a.org['id']}/billing")  # create the wallet (USD, simulation trial credit)
+    # A lookup on the fast model: 1,000 in / 200 out tokens cost USD 0.0002, x3 is below the USD 0.01 minimum.
+    fake = live_ai([([call("crm_tasks", {"due": "today"})], (600, 100, 120)), ([say("Nothing due.")], (400, 0, 80))])
+    r, evs = ask(a, "What's due today?")
+    assert r.status_code == 200 and [q["model"] for q in fake.requests] == ["gpt-6-luna", "gpt-6-luna"]
+    msg = first(evs, "done")["message"]
+    assert msg["charge"] == {"amount": 0.01, "currency": "USD"} and msg["model"] == "gpt-6-luna"
+    txs = ai_txs(a.org["id"])
+    assert len(txs) == 1 and float(txs[0].amount) == -0.01 and txs[0].idempotency_key == f"ai:msg:{msg['id']}"
+    assert txs[0].description == "AI Assistant" and txs[0].meta["models"] == ["gpt-6-luna"]
+    assert txs[0].meta["input_tokens"] == 1000 and txs[0].meta["cached_tokens"] == 100
+    assert float(call_cost("gpt-6-luna", 1000, 100, 200)) == pytest.approx((900 * 0.10 + 100 * 0.01 + 200 * 0.5) / 1e6)
+
+    # Building a workflow escalates to the flagship and costs more: (20,000 x 8 + 3,000 x 40) / 1M = USD 0.28, x3.
+    fake = live_ai([([call("create_workflow_draft", {"name": "Follow up", "trigger": "form_submitted",
+                                                     "steps": [{"type": "wait", "amount": 1, "unit": "days"}]})],
+                     (20000, 0, 3000)), ([say("Prepared.")], (0, 0, 0))])
+    r, evs = ask(a, "Build a workflow that follows up form leads")
+    assert [q["model"] for q in fake.requests] == ["gpt-6.2-astra", "gpt-6.2-astra"]
+    assert first(evs, "done")["message"]["charge"]["amount"] == pytest.approx(0.84)
+    assert first(evs, "action")["tool"] == "create_workflow_draft"
+
+    # Pro: 20% off AI too.
+    make_pro(a.org["id"])
+    live_ai([([say("Hi!")], (20000, 0, 3000))])
+    r, evs = ask(a, "Make a workflow for new contacts")  # flagship, no tools
+    assert first(evs, "done")["message"]["charge"]["amount"] == pytest.approx(0.84 * 0.8)
+    assert len(ai_txs(a.org["id"])) == 3
+
+
+def test_metering_is_idempotent_and_refuses_before_the_model_when_the_wallet_is_empty(ai, live_ai):
+    from app.services.ai_team import metering
+
+    a = ai
+    a.get(f"/organizations/{a.org['id']}/billing")
+    m = metering.Meter()
+    m.add(SimpleNamespace(model="gpt-6-luna", input_tokens=10, cached_tokens=0, output_tokens=10, simulated=False))
+    with SessionLocal() as db:
+        one = metering.charge(db, a.org["id"], a.app_id, m, key="ai:msg:test", description="AI Assistant",
+                              reference_type="ai_message", reference_id="test")
+        two = metering.charge(db, a.org["id"], a.app_id, m, key="ai:msg:test", description="AI Assistant",
+                              reference_type="ai_message", reference_id="test")
+        db.commit()
+    assert one["amount"] == 0.01 and two is None and len(ai_txs(a.org["id"])) == 1
+
+    set_wallet(a.org["id"], "0.005")
+    fake = live_ai([([say("never")], (1, 0, 1))])
+    r, _ = ask(a, "How did we do this week?")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "INSUFFICIENT_BALANCE"
+    assert "Add credit to keep using AI" in r.json()["error"]["message"]
+    assert fake.requests == []  # refused before calling the model
+    ag = create_agent(a, "daily_report")
+    r = a.post(f"{a.ai}/agents/{ag['id']}/run", json={})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "INSUFFICIENT_BALANCE"
+    # Usage caps weren't consumed by the refused message.
+    assert a.get(f"{a.ai}/status").json()["usage"]["assistant_messages"]["used"] == 0
+
+
+def test_agent_runs_are_charged_dry_runs_are_free_and_empty_wallets_pause(ai, live_ai):
+    a = ai
+    a.get(f"/organizations/{a.org['id']}/billing")
+    ag = create_agent(a, "daily_report")
+    # Dry run: free.
+    fake = live_ai([([call("analytics_summary", {"days": 1})], (5000, 0, 400)), ([say("Report.")], (6000, 0, 300))])
+    dry = a.post(f"{a.ai}/agents/{ag['id']}/run", json={"dry_run": True}).json()
+    assert dry["status"] == "completed" and dry["charge"] is None and dry["cost_usd"] > 0
+    assert ai_txs(a.org["id"]) == [] and [q["model"] for q in fake.requests] == ["gpt-6-luna", "gpt-6-luna"]
+    # A real run: one charge for all its steps, shown on the run; each step records its model.
+    live_ai([([call("analytics_summary", {"days": 1})], (5000, 0, 400)), ([say("Report.")], (6000, 0, 300))])
+    run = a.post(f"{a.ai}/agents/{ag['id']}/run", json={}).json()
+    cost = (11000 * 0.10 + 700 * 0.5) / 1e6
+    assert run["status"] == "completed" and run["cost_usd"] == pytest.approx(cost)
+    assert run["charge"] == {"amount": 0.01, "currency": "USD"} and run["models"] == ["gpt-6-luna"]  # minimum
+    assert {s["model"] for s in run["steps"] if s["kind"] in ("tool", "message")} == {"gpt-6-luna"}
+    txs = ai_txs(a.org["id"])
+    assert len(txs) == 1 and txs[0].idempotency_key == f"ai:run:{run['id']}"
+    assert txs[0].description == "AI agent: Daily performance report"
+    # The lead qualifier reasons, so it runs on the flagship.
+    lead = contact(a, "Ira", "ira@corp.example")
+    q = create_agent(a, "lead_qualifier")
+    fake = live_ai([([say("Nothing to do.")], (100, 0, 10))])
+    a.post(f"{a.ai}/agents/{q['id']}/run", json={})
+    assert fake.requests[0]["model"] == "gpt-6.2-astra"
+    del lead
+
+    # Empty wallet: scheduled runs pause (stay queued) and owners are told once a day.
+    set_wallet(a.org["id"], "0")
+    enable(a, ag["id"])
+    with SessionLocal() as db:
+        db.execute(update(AiAgent).where(AiAgent.id == ag["id"]).values(next_run_at=utcnow() - timedelta(minutes=1)))
+        db.commit()
+    fake = live_ai([([say("x")], (1, 0, 1))])
+    tick()
+    tick()
+    runs = [r for r in a.get(f"{a.ai}/agents/{ag['id']}/runs").json() if r["trigger_key"].startswith("schedule")]
+    assert runs[0]["status"] == "queued" and "add credit" in runs[0]["error"].lower() and fake.requests == []
+    from app.models import Notification
+
+    with SessionLocal() as db:
+        n = db.scalars(select(Notification).where(Notification.type == "ai_wallet_empty")).all()
+    assert len(n) == 1
+
+
+def test_workflow_ai_step_is_metered_and_simulation_is_free(ai, live_ai):
+    from app.services.ai_team.workflow_nodes import run_ai_step
+
+    a = ai
+    a.get(f"/organizations/{a.org['id']}/billing")
+    a.post(f"{a.base}/audience/attributes", json={"key": "intent", "label": "Intent", "data_type": "text"})
+    c = contact(a, "Tara")
+    d = {"mode": "write", "prompt": "Write an opening line", "output_field": "intent"}
+    live_ai([([say("Hello Tara!")], (300, 0, 40))])
+    with SessionLocal() as db:
+        outcome, detail = run_ai_step(db, a.org["id"], a.app_id, d, db.get(Contact, c["id"]), "run1", "n1")
+        db.commit()
+    assert outcome == "done" and "USD 0.01" in detail
+    txs = ai_txs(a.org["id"])
+    assert len(txs) == 1 and txs[0].idempotency_key == "ai:step:run1:n1" and txs[0].description == "Workflow AI step"
+
+
+def test_simulation_charges_nothing(ai):
+    a = ai
+    r, evs = ask(a, "How did we do this week?")
+    msg = first(evs, "done")["message"]
+    assert msg["simulated"] and msg["charge"] is None
+    ag = create_agent(a, "daily_report")
+    run = a.post(f"{a.ai}/agents/{ag['id']}/run", json={}).json()
+    assert run["simulated"] and run["charge"] is None and "no charge" in run["summary"]
+    assert ai_txs(a.org["id"]) == []
+
+
+def test_new_prices_in_public_pricing_and_minimum_top_up(owner, monkeypatch):
+    from app.services.billing.plans import PLANS
+    from tests.conftest import Api
+
+    p = Api().client.get("/api/v1/public/pricing?currency=USD").json()
+    r = p["rates"]
+    assert (r["voice_minute"], r["voice_ai_minute"], r["chat_reply"], r["email"]) == (0.07, 0.40, 0.06, 0.001)
+    assert (r["ai_assistant_message_from"], r["ai_assistant_message_typical"], r["ai_agent_run_typical"]) == \
+        (0.01, 0.04, 0.12)
+    assert p["topup_min"] == 10
+    inr = Api().client.get("/api/v1/public/pricing?currency=INR").json()["rates"]
+    assert (inr["voice_minute"], inr["voice_ai_minute"], inr["chat_reply"]) == (2.5, 25.0, 4.0)
+    assert (inr["ai_assistant_message_from"], inr["ai_assistant_message_typical"], inr["ai_agent_run_typical"]) == \
+        (1.0, 3.0, 10.0)
+    assert "AI Assistant and agents (pay per use from your wallet)" in PLANS["starter"]["features"]
+    assert "20% off all usage, including AI" in PLANS["pro"]["features"]
+
+    b = f"/organizations/{owner.org['id']}/billing"
+    s = owner.get(b).json()
+    assert s["ai_pricing"]["ai_assistant_message_typical"] == 0.04 and s["topup"]["min"] == 10
+    monkeypatch.setattr(settings, "COMMUNICATION_MODE", "live")
+    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_x")
+    assert owner.get(f"{b}/payments/options").json()["min"] == 10
+    err = owner.post(f"{b}/checkout", json={"amount": "9.99"}).json()["error"]
+    assert err["code"] == "INVALID_AMOUNT" and "minimum top-up is USD 10" in err["message"]

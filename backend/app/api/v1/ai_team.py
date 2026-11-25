@@ -38,7 +38,15 @@ def ai_status(ctx: AppCtx, db: DB):
     ctx.require(Perm.AI_USE)
     return {"simulated": not llm.configured(), "model": llm.model_for() if llm.configured() else None,
             "usage": usage.summary(db, ctx.organization_id), "pending_approvals": actions.pending_count(db, ctx),
-            "can_manage": ctx.has(Perm.AI_MANAGE), "slack": slack.status(db, ctx)}
+            "can_manage": ctx.has(Perm.AI_MANAGE), "slack": slack.status(db, ctx), "pricing": _ai_prices(db, ctx)}
+
+
+def _ai_prices(db, ctx) -> dict:
+    from app.services.ai_team.metering import typical
+    from app.services.billing import wallet as wl
+
+    cur = wl.get_wallet(db, ctx.organization_id).currency
+    return {"currency": cur, **typical(cur)}
 
 
 @router.get("/tools")

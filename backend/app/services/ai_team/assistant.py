@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import NotFound
 from app.core.permissions import Perm
 from app.models.ai_team import AiPendingAction, AssistantConversation, AssistantMessage
-from app.services.ai_team import actions, guide, llm, prompts, tools, usage
+from app.services.ai_team import actions, guide, llm, metering, prompts, routing, tools, usage
 from app.services.ai_team.registry import ToolError
 from app.utils.time import utcnow
 
@@ -32,7 +32,9 @@ def conv_out(c: AssistantConversation) -> dict:
 def message_out(m: AssistantMessage) -> dict:
     return {"id": m.id, "role": m.role, "content": m.content, "links": m.links or [],
             "tools": [t for t in (m.tool_calls or []) if t.get("name")], "simulated": m.simulated,
-            "created_at": m.created_at.isoformat()}
+            "charge": ({"amount": float(m.charge_amount), "currency": m.charge_currency}
+                       if m.charge_amount is not None else None),
+            "model": m.model, "created_at": m.created_at.isoformat()}
 
 
 def list_conversations(db: Session, ctx, limit: int = 30) -> list[dict]:
@@ -239,8 +241,10 @@ def _links_from(results: list[dict]) -> list[dict]:
 
 def start(db: Session, ctx, conv_id: str | None, text: str, page: dict | None) -> tuple[AssistantConversation,
                                                                                        AssistantMessage]:
-    """Check the daily limit, then store the user's message (committed before streaming starts)."""
+    """Check the wallet (metered AI must be payable) and the daily fair-use cap, then store the user's message
+    (committed before streaming starts)."""
     ctx.require(Perm.AI_USE)
+    metering.ensure_can_afford(db, ctx.organization_id)
     usage.consume_or_raise(db, ctx.organization_id, usage.ASSISTANT)
     conv = get_conversation(db, ctx, conv_id) if conv_id else new_conversation(db, ctx)
     if conv.message_count == 0 or conv.title == "New chat":
@@ -262,12 +266,16 @@ def reply_events(db: Session, ctx, conv: AssistantConversation, page: dict | Non
     sim = None if llm.configured() else llm.Simulator(plan, {"page": page or {}})
     if sim:
         yield "meta", {"simulated": True}
+    question = next((it["content"] for it in reversed(items) if it.get("role") == "user"), "")
     text, used, results, cards = "", [], [], []
+    meter = metering.Meter()
     tokens_in = tokens_out = 0
-    proposed = False
-    for _ in range(MAX_TURNS):
+    proposed, retry_used, retry_next = False, False, False
+    for round_idx in range(MAX_TURNS):
         turn = None
-        for kind, data in (sim.stream(items) if sim else llm.stream(system, items, specs)):
+        model = routing.assistant_model(question, round_idx, retry=retry_next)
+        retry_next = False
+        for kind, data in (sim.stream(items) if sim else llm.stream(system, items, specs, model=model)):
             if kind == "delta":
                 text += data
                 yield "delta", {"text": data}
@@ -275,11 +283,15 @@ def reply_events(db: Session, ctx, conv: AssistantConversation, page: dict | Non
                 turn = data
         tokens_in += turn.input_tokens
         tokens_out += turn.output_tokens
+        meter.add(turn)
         if not turn.tool_calls:
             break
         items += turn.output_items
+        errors: list[str] = []
         for call in turn.tool_calls:
             out = _run_call(db, ctx, conv, call, proposed)
+            if out.get("code"):
+                errors.append(out["code"])
             if out.get("card"):
                 proposed = True
                 cards.append(out["card"])
@@ -296,13 +308,24 @@ def reply_events(db: Session, ctx, conv: AssistantConversation, page: dict | Non
         db.commit()
         if text and not text.endswith("\n"):
             text += "\n\n"
+        # Output that failed validation on the fast model: retry the next round once on the flagship.
+        if not sim and not retry_used and model == llm.fast_model() and routing.bad_output(turn, errors):
+            retry_used = retry_next = True
     links = _links_from(results)
     msg = AssistantMessage(organization_id=ctx.organization_id, application_id=ctx.application_id,
                            conversation_id=conv.id, role="assistant",
                            content=text.strip() or ("I've prepared that for you below." if cards else "Done."),
                            tool_calls=used or None, links=links or None, simulated=bool(sim),
-                           input_tokens=tokens_in, output_tokens=tokens_out)
+                           input_tokens=tokens_in, output_tokens=tokens_out,
+                           model=",".join(meter.models)[:200] or None, cached_tokens=meter.cached_tokens,
+                           cost_usd=meter.cost_usd)
     db.add(msg)
+    db.flush()
+    charged = metering.charge(db, ctx.organization_id, ctx.application_id, meter, key=f"ai:msg:{msg.id}",
+                              description="AI Assistant", reference_type="ai_message", reference_id=msg.id,
+                              meta={"conversation_id": conv.id, "user_id": ctx.user.id})
+    if charged:
+        msg.charge_amount, msg.charge_currency = charged["amount"], charged["currency"]
     conv.message_count += 1
     conv.updated_at = utcnow()
     db.commit()
@@ -311,7 +334,7 @@ def reply_events(db: Session, ctx, conv: AssistantConversation, page: dict | Non
 
 def _run_call(db: Session, ctx, conv: AssistantConversation, call: llm.ToolCall, proposed: bool) -> dict:
     if call.invalid:
-        return {"error": "The arguments weren't valid JSON"}
+        return {"error": "The arguments weren't valid JSON", "code": "INVALID_ARGUMENTS"}
     try:
         tool = tools.get(call.name)
         if tool.kind == "read":
@@ -323,7 +346,7 @@ def _run_call(db: Session, ctx, conv: AssistantConversation, call: llm.ToolCall,
         return {"summary": f"I've prepared **{prepared.title}**. Review it below, then confirm, edit or cancel.",
                 "status": "awaiting_confirmation", "action_id": a.id, "card": actions.card(a)}
     except ToolError as exc:
-        out = {"error": exc.message}
+        out = {"error": exc.message, "code": exc.code}
         if exc.code == "NEVER_AVAILABLE":
             out["summary"] = exc.message
         if exc.link:

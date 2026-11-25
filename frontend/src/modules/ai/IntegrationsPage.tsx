@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, ExternalLink, FlaskConical, Hash, MessagesSquare as Slack, Unplug } from 'lucide-react'
+import { CheckCircle2, ExternalLink, FlaskConical, Hash, Unplug } from 'lucide-react'
+import { SlackLogo as Slack } from '@/components/SlackLogo'
 import { aiApi, aiqk, useSlackChannels, useSlackStatus } from '@/api/ai'
 import { errorMessage } from '@/api/client'
 import { ErrorState, LoadingRows, PageHeader } from '@/components/page'
@@ -111,7 +112,7 @@ export function IntegrationsPage() {
       ) : (
         <Card data-testid="slack-card">
           <CardHeader className="flex-row items-start gap-3 space-y-0">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#4A154B] text-white">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-white shadow-sm">
               <Slack className="size-5" />
             </span>
             <div className="min-w-0 flex-1">

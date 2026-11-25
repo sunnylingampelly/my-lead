@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import type { ActionCard as Card, AiUsage, AssistantMessage } from '@/types/ai'
 import { ActionCard, LinkButtons } from './ActionCard'
 import { OPEN_ASSISTANT_EVENT } from './lib'
+import { formatMoney } from '../sms/format'
 import { Markdown } from './Markdown'
 import { EXAMPLES, pageContext, suggestionsFor } from './suggestions'
 
@@ -29,12 +30,14 @@ interface Item {
   streaming?: boolean
   error?: string
   limit?: boolean
+  noCredit?: boolean
+  charge?: AssistantMessage['charge']
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 function fromDetail(messages: AssistantMessage[], actions: Card[]): Item[] {
-  const items: Item[] = messages.map((m) => ({ id: m.id, role: m.role, content: m.content, links: m.links, tools: m.tools, cards: [], simulated: m.simulated }))
+  const items: Item[] = messages.map((m) => ({ id: m.id, role: m.role, content: m.content, links: m.links, tools: m.tools, cards: [], simulated: m.simulated, charge: m.charge }))
   for (const a of actions) {
     const host = items.find((it, i) => it.role === 'assistant' && messages[i]!.created_at >= a.created_at)
     if (host) host.cards.push(a)
@@ -111,7 +114,7 @@ export function AssistantPanel() {
             else if (e.event === 'tool') patch((it) => ({ ...it, tools: [...it.tools, { name: e.data.name, label: e.data.label, ok: e.data.ok }] }))
             else if (e.event === 'action') patch((it) => ({ ...it, cards: [...it.cards, e.data] }))
             else if (e.event === 'done') {
-              patch((it) => ({ ...it, id: e.data.message.id, content: e.data.message.content, links: e.data.message.links, streaming: false }))
+              patch((it) => ({ ...it, id: e.data.message.id, content: e.data.message.content, links: e.data.message.links, charge: e.data.message.charge, streaming: false }))
               setUsage(e.data.usage)
             } else if (e.event === 'error') patch((it) => ({ ...it, streaming: false, error: e.data.message }))
           },
@@ -125,6 +128,7 @@ export function AssistantPanel() {
             streaming: false,
             error: errorMessage(err),
             limit: err instanceof ApiError && err.code === 'AI_DAILY_LIMIT',
+            noCredit: err instanceof ApiError && err.code === 'INSUFFICIENT_BALANCE',
           }))
       } finally {
         patch((it) => ({ ...it, streaming: false }))
@@ -285,6 +289,13 @@ export function AssistantPanel() {
                     <p className="mt-1 text-sm text-muted-foreground">
                       I can answer questions about your contacts, campaigns, deals, forms and chats, and prepare changes for you to confirm. I never send, delete or spend on my own.
                     </p>
+                    <p className="mt-2 text-xs text-muted-foreground" data-testid="ai-price-hint">
+                      {simulated
+                        ? 'Simulation mode: answers are scripted and free.'
+                        : status.data?.pricing
+                          ? `Pay per use from your wallet: ≈ ${formatMoney(status.data.pricing.ai_assistant_message_typical, status.data.pricing.currency)} per simple question. The charge is shown under each reply.`
+                          : null}
+                    </p>
                   </div>
                   {EXAMPLES.map((g) => (
                     <div key={g.title}>
@@ -328,8 +339,13 @@ export function AssistantPanel() {
                       ))}
                       {!it.streaming && it.links.length > 0 && <LinkButtons links={it.links} onNavigate={() => window.innerWidth < 640 && close()} />}
                       {it.error && (
-                        <div role="alert" className={cn('rounded-lg border px-3 py-2 text-sm', it.limit ? 'border-warning-border bg-warning-soft text-warning-strong' : 'border-danger-border bg-danger-soft text-danger-strong')}>
+                        <div role="alert" className={cn('rounded-lg border px-3 py-2 text-sm', it.limit || it.noCredit ? 'border-warning-border bg-warning-soft text-warning-strong' : 'border-danger-border bg-danger-soft text-danger-strong')}>
                           {it.error}
+                          {it.noCredit && org?.permissions.includes('billing.read') && (
+                            <Link to={`/orgs/${org.id}/billing?topup=1`} className="ml-1 font-medium underline" onClick={close} data-testid="ai-add-credit">
+                              Add credit
+                            </Link>
+                          )}
                           {it.limit && org?.permissions.includes('billing.read') && (
                             <Link to={`/orgs/${org.id}/billing#plan`} className="ml-1 font-medium underline" onClick={close}>
                               See plans
@@ -337,7 +353,11 @@ export function AssistantPanel() {
                           )}
                         </div>
                       )}
-                      {it.simulated && !it.streaming && <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Simulated answer</div>}
+                      {!it.streaming && !it.error && (it.simulated || it.charge) && (
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground" data-testid="ai-charge">
+                          {it.simulated ? 'Simulated, no charge' : `${formatMoney(it.charge!.amount, it.charge!.currency)} from your wallet`}
+                        </div>
+                      )}
                     </div>
                   ),
                 )

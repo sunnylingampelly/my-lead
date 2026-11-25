@@ -1,10 +1,12 @@
-import { Clock, Flag, GitBranch, Handshake, Hash, Mail, MessageSquare, PhoneCall, Sparkles, Split, UserCog, Zap, type LucideIcon } from 'lucide-react'
+import { Clock, Flag, GitBranch, Handshake, Mail, MessageSquare, PhoneCall, Sparkles, Split, UserCog, Zap } from 'lucide-react'
+import type { ComponentType } from 'react'
+import { SlackLogo } from '@/components/SlackLogo'
 import type { FlowEdge, FlowNode, NodeType, WorkflowGraph } from '@/api/automation'
 
 export interface NodeMeta {
   label: string
   description: string
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   /** Tailwind classes for the node's icon chip. */
   tone: string
   group: 'Trigger' | 'Messages' | 'Flow' | 'Contact' | 'CRM' | 'AI'
@@ -22,7 +24,7 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
   update_contact: { label: 'Update contact', description: 'Tags and lists', icon: UserCog, tone: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300', group: 'Contact', outputs: [null] },
   crm_action: { label: 'CRM action', description: 'Deals, tasks, owner, lifecycle', icon: Handshake, tone: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300', group: 'CRM', outputs: [null] },
   ai_step: { label: 'AI step', description: 'Classify, extract or write with AI', icon: Sparkles, tone: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-500/15 dark:text-fuchsia-300', group: 'AI', outputs: [null] },
-  slack_message: { label: 'Send to Slack', description: 'Post to a Slack channel', icon: Hash, tone: 'bg-purple-100 text-purple-800 dark:bg-purple-500/15 dark:text-purple-300', group: 'AI', outputs: [null] },
+  slack_message: { label: 'Send to Slack', description: 'Post to a Slack channel', icon: SlackLogo, tone: 'bg-purple-100 text-purple-800 dark:bg-purple-500/15 dark:text-purple-300', group: 'AI', outputs: [null] },
   end: { label: 'End', description: 'Finish the journey', icon: Flag, tone: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-500/20 dark:text-zinc-300', group: 'Flow', outputs: [] },
 }
 

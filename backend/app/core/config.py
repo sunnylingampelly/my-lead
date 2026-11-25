@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         "US": {"currency": "USD", "per_email": 0.0010},
         # AED rows across the *_PRICING settings are the USD prices x 3.6725, rounded.
         # OWNER: review the AED margins before launch.
-        "AE": {"currency": "AED", "per_email": 0.0037},
+        "AE": {"currency": "AED", "per_email": 0.004},
         "default": {"currency": "USD", "per_email": 0.0010},
     }
     # Conversion between a channel's price currency and the wallet currency. Pairs without a direct rate
@@ -138,23 +138,25 @@ class Settings(BaseSettings):
     BACKUP_DIR: str | None = None
     # Simulation-mode test top-ups only; live payments need a payment provider (Phase 8).
     TEST_TOPUP_MAX: dict = {"INR": 100000, "USD": 1000, "AED": 3700}
+    # Real (Stripe / Razorpay) top-ups: smallest and largest amount per checkout, in the wallet currency.
+    TOPUP_MIN: dict = {"INR": 500, "AED": 50, "USD": 10}
+    TOPUP_MAX: dict = {"INR": 500000, "AED": 37000, "USD": 10000}
     VOICE_MAX_CONCURRENT_CALLS: int = 10
     # Price per started minute of an answered call, by country.
+    # Recorded / text-to-speech calls (approved 2026-11 price list; UAE voice is off at launch).
     VOICE_PRICING: dict = {
-        "IN": {"currency": "INR", "per_minute": 0.60},
-        "US": {"currency": "USD", "per_minute": 0.0140},
-        # USD 0.10 (international) x 3.6725; OWNER: review the AED margin. UAE voice is off at launch.
-        "AE": {"currency": "AED", "per_minute": 0.37},
+        "IN": {"currency": "INR", "per_minute": 2.50},
+        "US": {"currency": "USD", "per_minute": 0.07},
+        "AE": {"currency": "AED", "per_minute": 3.50},
         "default": {"currency": "USD", "per_minute": 0.10},
     }
     # AI calling agents: price per started minute of an answered AI-agent call (replaces VOICE_PRICING for
     # those calls; usage discounts apply at settlement). Estimates assume AI_CALL_EXPECTED_MINUTES per answer.
     VOICE_AI_PRICING: dict = {
-        "IN": {"currency": "INR", "per_minute": 6.0},
-        "US": {"currency": "USD", "per_minute": 0.12},
-        # USD 0.15 (international) x 3.6725; OWNER: review the AED margin. UAE voice is off at launch.
-        "AE": {"currency": "AED", "per_minute": 0.55},
-        "default": {"currency": "USD", "per_minute": 0.15},
+        "IN": {"currency": "INR", "per_minute": 25.0},
+        "US": {"currency": "USD", "per_minute": 0.40},
+        "AE": {"currency": "AED", "per_minute": 4.75},
+        "default": {"currency": "USD", "per_minute": 0.45},
     }
     AI_CALL_EXPECTED_MINUTES: int = 2
     # Claude for AI calling agents. Without a key, test chats and simulated calls use an offline responder.
@@ -166,10 +168,10 @@ class Settings(BaseSettings):
     CHAT_AI_MODEL: str = "claude-opus-5-5"
     CHAT_AI_EFFORT: str = "low"
     CHAT_AI_PRICING: dict = {
-        "IN": {"currency": "INR", "per_reply": 1.50},
-        "US": {"currency": "USD", "per_reply": 0.02},
-        "AE": {"currency": "AED", "per_reply": 0.07},  # USD 0.02 x 3.6725; OWNER: review the AED margin
-        "default": {"currency": "USD", "per_reply": 0.02},
+        "IN": {"currency": "INR", "per_reply": 4.0},
+        "US": {"currency": "USD", "per_reply": 0.06},
+        "AE": {"currency": "AED", "per_reply": 0.22},
+        "default": {"currency": "USD", "per_reply": 0.06},
     }
     # Knowledge up to this size goes whole into the (cached) system prompt; above it, the best chunks are
     # retrieved per question with MariaDB FULLTEXT search.
@@ -186,6 +188,19 @@ class Settings(BaseSettings):
     OPENAI_MODEL_FAST: str | None = "gpt-6-luna"  # cheap classification/extraction (automation AI step)
     OPENAI_TIMEOUT_SECONDS: float = 60.0
     AI_AGENT_MAX_STEPS: int = 8
+    # Metered AI Team billing: provider cost from the tokens each call used (USD per 1M tokens; cached input is
+    # billed at the cached rate), times AI_MARKUP, at least AI_MIN_CHARGE per assistant message / agent run /
+    # workflow AI step, converted to the wallet currency, then the plan's usage discount (Pro: 20% off).
+    # Unknown models are priced like the most expensive one listed.
+    OPENAI_PRICING: dict = {
+        "gpt-6.2-astra": {"input": 8.00, "cached": 0.40, "output": 40.00},
+        "gpt-6-luna": {"input": 0.10, "cached": 0.01, "output": 0.50},
+    }
+    AI_MARKUP: float = 3.0
+    AI_MIN_CHARGE: dict = {"INR": 1.0, "AED": 0.05, "USD": 0.01}
+    # Typical charges shown on pricing pages (a simple question on the fast model; a typical agent run).
+    AI_TYPICAL_CHARGE: dict = {"assistant_message": {"INR": 3.0, "AED": 0.15, "USD": 0.04},
+                               "agent_run": {"INR": 10.0, "AED": 0.45, "USD": 0.12}}
     AI_AGENT_RUN_TIMEOUT_SECONDS: int = 120
     # Slack app ("Add to Slack", OAuth v2). Without SLACK_CLIENT_ID/SECRET a simulated Slack connection logs
     # messages to /dev/slack instead. The signing secret verifies interactivity requests (Approve / Reject).

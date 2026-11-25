@@ -299,7 +299,8 @@ def advance(db: Session, w: Workflow, run: WorkflowRun) -> None:
         elif t == "ai_step":
             from app.services.ai_team.workflow_nodes import run_ai_step
 
-            outcome, detail = run_ai_step(db, w.organization_id, w.application_id, data(node), contact)
+            outcome, detail = run_ai_step(db, w.organization_id, w.application_id, data(node), contact, run.id,
+                                          node["id"])
             _step(db, run, node, outcome, detail)
             nxt = g.next(node["id"])
         elif t == "slack_message":

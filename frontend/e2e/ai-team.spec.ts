@@ -40,6 +40,8 @@ test('AI Team: assistant answers and confirms, agents report to Slack, approvals
   const panel = page.getByTestId('ai-panel')
   await expect(panel).toBeVisible()
   await expect(panel.getByTestId('ai-simulated')).toBeVisible()
+  // Simulation mode is free, and says so.
+  await expect(panel.getByTestId('ai-price-hint')).toContainText('free')
   await expect(page.getByTestId('ai-input')).toBeFocused()
 
   // A read question: an answer with deep links.
@@ -47,7 +49,8 @@ test('AI Team: assistant answers and confirms, agents report to Slack, approvals
   const answer = panel.getByTestId('ai-message').last()
   await expect(answer).toContainText(/stale deal/i)
   await expect(answer.getByTestId('ai-link').first()).toBeVisible()
-  await expect(panel.getByTestId('ai-usage')).toContainText('1/50')
+  await expect(panel.getByTestId('ai-usage')).toContainText('1/200')
+  await expect(answer.getByTestId('ai-charge')).toHaveText(/Simulated, no charge/i)
 
   // A write: an action card that only runs on Confirm.
   await ask(page, 'create a task to call Priya tomorrow')
@@ -84,6 +87,7 @@ test('AI Team: assistant answers and confirms, agents report to Slack, approvals
   await page.getByTestId('agent-run-now').click()
   const log = page.getByTestId('run-detail')
   await expect(log).toContainText('Completed')
+  await expect(log.getByTestId('run-cost')).toContainText('Simulated, no charge')
   await expect(log.getByTestId('run-step').first()).toContainText('Analytics summary')
   await expect(log.locator('[data-kind="deliver"]')).toContainText('Posted to Slack #general')
 
@@ -104,6 +108,11 @@ test('AI Team: assistant answers and confirms, agents report to Slack, approvals
   await expect(approval.getByRole('link', { name: 'Review draft' })).toBeVisible()
 
   // The simulated Slack log has the report and the approval request (now marked approved).
+  // Simulation charged nothing: no AI transactions in billing.
+  const txs = await page.request.get(`/api/v1/apps/${appId}/billing/transactions`, { headers })
+  const txBody = (await txs.json()) as { items: { channel: string | null }[] }
+  expect(txBody.items.filter((t) => t.channel === 'ai')).toHaveLength(0)
+
   await page.goto('/dev/slack')
   const items = page.getByTestId('slack-log-item')
   await expect(items.filter({ hasText: 'Daily performance report' }).first()).toBeVisible()

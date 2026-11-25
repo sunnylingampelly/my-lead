@@ -455,8 +455,8 @@ def test_ai_reply_charges_the_wallet_once_with_the_pro_discount(chat, claude):
     r = v.say("How long is the warranty?")
     reply = r.json()["messages"][-1]
     assert reply["body"] == "Our panels carry a 25 year warranty." and reply["meta"]["simulated"] is False
-    # INR 1.50 (the app is in India) in the wallet's currency, less Pro's 20%.
-    price = wl.dec(wl.convert(Decimal("1.50"), "INR", wl.get_wallet(SessionLocal(), chat.org["id"]).currency)
+    # INR 4 (the app is in India) in the wallet's currency, less Pro's 20%.
+    price = wl.dec(wl.convert(Decimal("4.0"), "INR", wl.get_wallet(SessionLocal(), chat.org["id"]).currency)
                    * Decimal("0.8"))
     assert price > 0 and balance(chat.org["id"]) == before - price
     with SessionLocal() as db:

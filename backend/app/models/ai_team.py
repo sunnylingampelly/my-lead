@@ -6,7 +6,7 @@ Every table is tenant-scoped. Tool calls and results are stored as JSON text (JS
 deeply nested."""
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.audience import TenantMixin
@@ -43,6 +43,12 @@ class AssistantMessage(TenantMixin, Base):
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Metering (assistant replies): models used, cached input tokens, provider cost and the wallet charge.
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), nullable=False, default=0)
+    charge_amount: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    charge_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
@@ -105,6 +111,8 @@ class AiAgent(TenantMixin, TimestampMixin, Base):
     event_cursor: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     last_status: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # Runs pause while the wallet can't pay; owners are told at most once a day.
+    wallet_paused_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class AgentRun(TenantMixin, Base):
@@ -129,6 +137,11 @@ class AgentRun(TenantMixin, Base):
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    models: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), nullable=False, default=0)
+    charge_amount: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    charge_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     started_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
@@ -154,6 +167,9 @@ class AgentRunStep(TenantMixin, Base):
     action_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 

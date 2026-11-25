@@ -83,7 +83,7 @@ def test_uae_org_gets_aed_wallet_prices_and_plan(api_factory):
     assert s["low_balance_threshold"] == settings.LOW_BALANCE_DEFAULT["AED"]
     rows = {r["country"]: r for r in s["pricing"]}
     assert set(rows) == {"IN", "AE", "US"}
-    assert rows["AE"]["email"] == pytest.approx(0.0037) and rows["AE"]["chat_reply"] == pytest.approx(0.07)
+    assert rows["AE"]["email"] == pytest.approx(0.004) and rows["AE"]["chat_reply"] == pytest.approx(0.22)
     assert rows["US"]["email"] == pytest.approx(0.0037)  # USD 0.001 shown in AED
     catalogue = {p["key"]: p for p in a.get(f"{a.b}/plan").json()["catalogue"]}
     assert (catalogue["pro"]["price"], catalogue["pro"]["currency"]) == (179, "AED")
@@ -100,7 +100,10 @@ def test_public_pricing_in_aed():
     assert (p["currency"], p["market"], p["gst_rate"], p["reverse_charge"]) == ("AED", "AE", None, True)
     assert p["channels"] == {"sms": False, "voice": False}  # coming soon
     assert {x["key"]: x["price"] for x in p["plans"]}["pro"] == 179
-    assert p["rates"]["email"] == pytest.approx(0.0037) and p["rates"]["voice_ai_minute"] == pytest.approx(0.55)
+    assert p["rates"]["email"] == pytest.approx(0.004) and p["rates"]["voice_ai_minute"] == pytest.approx(4.75)
+    assert p["rates"]["voice_minute"] == pytest.approx(3.50) and p["rates"]["chat_reply"] == pytest.approx(0.22)
+    assert p["rates"]["ai_assistant_message_from"] == 0.05 and p["rates"]["ai_assistant_message_typical"] == 0.15
+    assert p["rates"]["ai_agent_run_typical"] == 0.45 and p["topup_min"] == 50
     assert Api().client.get("/api/v1/public/pricing?currency=EUR").status_code == 422
 
 

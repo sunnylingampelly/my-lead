@@ -13,7 +13,11 @@ export interface BillingSummary {
   daily_usage: { date: string; amount: number }[]
   per_application: { application_id: string | null; application: string; spend: number }[]
   holds: { id: string; description: string; amount: number; created_at: string; application_id: string | null }[]
-  pricing: { country: string; email: number; sms_promotional: number; sms_transactional: number; voice_minute: number; chat_reply?: number }[]
+  pricing: { country: string; email: number; sms_promotional: number; sms_transactional: number; voice_minute: number; voice_ai_minute?: number; chat_reply?: number }[]
+  /** AI Team: metered (about ai_markup x the model cost) with a minimum per message / run, in the wallet currency. */
+  ai_pricing?: { ai_assistant_message_from: number; ai_assistant_message_typical: number; ai_agent_run_from: number; ai_agent_run_typical: number; ai_markup: number }
+  /** Real top-ups (Stripe / Razorpay): smallest and largest amount per payment. */
+  topup?: { provider: string | null; min: number; max: number }
   test_mode: boolean
   can_manage: boolean
   plan?: PlanBrief
@@ -73,7 +77,7 @@ export interface WalletTx {
   application_id: string | null
   reference_type: string | null
   reference_id: string | null
-  meta: { units?: number; original_amount?: number; original_currency?: string; plan_discount?: number; plan?: string; period_start?: string; period_end?: string }
+  meta: { units?: number; original_amount?: number; original_currency?: string; plan_discount?: number; plan?: string; period_start?: string; period_end?: string; models?: string[]; input_tokens?: number; output_tokens?: number }
   created_at: string
 }
 

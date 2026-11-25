@@ -84,7 +84,7 @@ test('pricing: live plan prices, comparison, rate card, calculator', async ({ pa
   await page.getByRole('radio', { name: '₹ INR' }).click()
   await expect(page.getByTestId('plan-pro')).toContainText('₹2,999')
   await expect(page.getByTestId('plan-pro')).toContainText('+ GST')
-  await expect(page.getByTestId('rate-card')).toContainText('₹1.50')
+  await expect(page.getByTestId('rate-card')).toContainText('₹2.50')
   await expect(page.getByTestId('calculator')).toContainText('GST on top-ups')
 
   // USD: $49, no GST.
@@ -97,6 +97,23 @@ test('pricing: live plan prices, comparison, rate card, calculator', async ({ pa
   await expect(table).toBeVisible()
   await expect(table).toContainText('AI calling agents')
   await expect(table).toContainText('Unlimited')
+  // AI Team: pay per use on both plans, with the fair-use caps.
+  await expect(table).toContainText('Pay per use')
+  await expect(table).toContainText('Fair-use limit: 200/day')
+
+  // Rate card in USD: the approved prices, including the metered AI rows.
+  await page.getByRole('radio', { name: '$ USD' }).click()
+  const rates = page.getByTestId('rate-card')
+  await expect(rates.getByTestId('rate-voice_minute')).toHaveText('$0.07')
+  await expect(rates.getByTestId('rate-voice_ai_minute')).toHaveText('$0.40')
+  await expect(rates.getByTestId('rate-chat_reply')).toHaveText('$0.06')
+  await expect(rates.getByTestId('rate-ai_assistant_message_typical')).toHaveText('≈ $0.04')
+  await expect(rates.getByTestId('rate-ai_agent_run_typical')).toHaveText('≈ $0.12')
+  await expect(rates).toContainText('metered, from $0.01')
+  await expect(page.getByTestId('calculator')).toContainText('AI Assistant questions')
+  await expect(page.getByTestId('calculator')).toContainText('AI agent runs')
+  await page.getByRole('radio', { name: '₹ INR' }).click()
+  await expect(rates.getByTestId('rate-voice_minute')).toHaveText('₹2.50')
 
   // Calculator: Starter is cheaper at low volume; Pro wins at high volume.
   const result = page.getByTestId('calc-result')

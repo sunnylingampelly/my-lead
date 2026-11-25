@@ -63,7 +63,8 @@ def test_trial_credit_currency_and_summary(india, owner):
     # An organization without a country gets a USD wallet.
     assert owner.get(f"/organizations/{owner.org['id']}/billing").json()["currency"] == "USD"
     p = {r["country"]: r for r in s["pricing"]}
-    assert p["IN"]["sms_promotional"] == 0.25 and p["US"]["voice_minute"] == pytest.approx(0.014 * 83, rel=1e-3)
+    assert p["IN"]["sms_promotional"] == 0.25 and p["US"]["voice_minute"] == pytest.approx(0.07 * 83, rel=1e-3)
+    assert p["IN"]["voice_ai_minute"] == 25.0 and p["IN"]["chat_reply"] == 4.0
 
 
 def test_email_hold_settlement_idempotent_and_released(india):

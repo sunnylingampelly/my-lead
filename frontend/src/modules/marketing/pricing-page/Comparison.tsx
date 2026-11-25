@@ -11,8 +11,12 @@ const LIMITS: { key: LimitKey; label: string }[] = [
   { key: 'chatbots', label: 'Website chatbots' },
   { key: 'chat_seats', label: 'Live-chat agents' },
   { key: 'voice_agents', label: 'AI calling agents' },
-  { key: 'ai_assistant_messages_per_day', label: 'AI Assistant messages a day (fair use)' },
-  { key: 'ai_agent_runs_per_day', label: 'AI agent runs a day (fair use)' },
+]
+
+/** AI Team features: pay per use on both plans, with a daily fair-use limit. */
+const AI_FEATURES: { key: LimitKey; label: string }[] = [
+  { key: 'ai_assistant_messages_per_day', label: 'AI Assistant' },
+  { key: 'ai_agent_runs_per_day', label: 'AI agents (runs)' },
 ]
 
 const BOTH = [
@@ -21,7 +25,7 @@ const BOTH = [
   'CRM, pipelines and tasks',
   'Automation journeys',
   'Analytics for every channel',
-  'AI Team: in-app assistant, AI agents and Slack approvals',
+  'AI Team: Slack approvals and the automation AI step',
   'Simulation mode before going live',
   'TRAI, TCPA, UAE TDRA, consent and opt-out tools',
   'Two-factor sign-in and audit log',
@@ -65,6 +69,21 @@ export function Comparison({ data, currency }: { data: PublicPricing | undefined
         s: starter ? formatLimit(starter.limits[l.key]) : wait,
         p: pro ? formatLimit(pro.limits[l.key]) : wait,
       })),
+    },
+    {
+      title: 'AI Team',
+      rows: AI_FEATURES.map((l) => {
+        const cell = (p: typeof pro) =>
+          p ? (
+            <span className="flex flex-col">
+              <span>Pay per use</span>
+              <span className="text-xs text-muted-foreground">Fair-use limit: {formatLimit(p.limits[l.key])}/day</span>
+            </span>
+          ) : (
+            wait
+          )
+        return { label: l.label, s: cell(starter), p: cell(pro) }
+      }),
     },
     {
       title: 'Branding',

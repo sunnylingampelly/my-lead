@@ -1,23 +1,25 @@
 import { useCallback, useId, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Bot, Mail, PhoneCall, Sparkles, TrendingDown, type LucideIcon } from 'lucide-react'
+import { Bot, BrainCircuit, Mail, PhoneCall, Sparkles, TrendingDown, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnimatedNumber } from '../components/AnimatedNumber'
 import { channelSoon, comparePlans, findPlan, money, moneyTotal, percent, type Currency, type PublicPricing, type RateKey, type Volumes } from '../pricing'
 
-type Field = { key: keyof Volumes; label: string; unit: string; icon: LucideIcon; max: number; step: number; rate: RateKey }
+type Field = { key: keyof Volumes; label: string; unit: string; icon: LucideIcon; max: number; step: number; rate: RateKey; approx?: boolean }
 
 const FIELDS: Field[] = [
   { key: 'emails', label: 'Emails per month', unit: 'emails', icon: Mail, max: 500_000, step: 1000, rate: 'email' },
   { key: 'voiceMinutes', label: 'Voice call minutes', unit: 'minutes', icon: PhoneCall, max: 20_000, step: 100, rate: 'voice_minute' },
   { key: 'aiMinutes', label: 'AI calling minutes', unit: 'minutes', icon: Sparkles, max: 10_000, step: 50, rate: 'voice_ai_minute' },
   { key: 'chatReplies', label: 'AI chat replies', unit: 'replies', icon: Bot, max: 20_000, step: 100, rate: 'chat_reply' },
+  { key: 'aiQuestions', label: 'AI Assistant questions', unit: 'questions', icon: BrainCircuit, max: 10_000, step: 50, rate: 'ai_assistant_message_typical', approx: true },
+  { key: 'agentRuns', label: 'AI agent runs', unit: 'runs', icon: BrainCircuit, max: 10_000, step: 50, rate: 'ai_agent_run_typical', approx: true },
 ]
 
 const PRESETS: { label: string; v: Volumes }[] = [
-  { label: 'Just starting', v: { emails: 5000, sms: 0, voiceMinutes: 0, aiMinutes: 100, chatReplies: 300 } },
-  { label: 'Growing', v: { emails: 25000, sms: 0, voiceMinutes: 500, aiMinutes: 500, chatReplies: 2000 } },
-  { label: 'Scaling', v: { emails: 100000, sms: 0, voiceMinutes: 2000, aiMinutes: 2000, chatReplies: 5000 } },
+  { label: 'Just starting', v: { emails: 5000, sms: 0, voiceMinutes: 0, aiMinutes: 100, chatReplies: 300, aiQuestions: 100, agentRuns: 60 } },
+  { label: 'Growing', v: { emails: 25000, sms: 0, voiceMinutes: 500, aiMinutes: 500, chatReplies: 2000, aiQuestions: 500, agentRuns: 300 } },
+  { label: 'Scaling', v: { emails: 100000, sms: 0, voiceMinutes: 2000, aiMinutes: 2000, chatReplies: 5000, aiQuestions: 2000, agentRuns: 1500 } },
 ]
 
 const num = (n: number) => Math.round(n).toLocaleString('en-IN')
@@ -110,7 +112,7 @@ export function Calculator({ data, currency }: { data: PublicPricing | undefined
               onChange={(n) => setV((cur) => ({ ...cur, [f.key]: n }))}
               rateLabel={
                 data
-                  ? `${money(data.rates[f.rate], currency)} each on Starter${
+                  ? `${f.approx ? '≈ ' : ''}${money(data.rates[f.rate], currency)} each on Starter${f.approx ? ' (metered)' : ''}${
                       (f.key === 'voiceMinutes' || f.key === 'aiMinutes') && channelSoon(data, 'voice')
                         ? ' · coming soon in the UAE'
                         : ''
@@ -176,7 +178,7 @@ export function Calculator({ data, currency }: { data: PublicPricing | undefined
                 </div>
               )}
               <p className="border-t border-white/10 pt-4 text-xs text-white/45">
-                {gst ? `+ ${gst}% GST on top-ups. ` : ''}Estimates only; you are charged for what you actually send. AI calls and voice are billed per started minute.
+                {gst ? `+ ${gst}% GST on top-ups. ` : ''}Estimates only; you are charged for what you actually send. AI calls and voice are billed per started minute; AI Assistant questions and agent runs are metered (about 3× the AI model’s cost, with a minimum) and shown here at typical prices.
               </p>
             </div>
           )}

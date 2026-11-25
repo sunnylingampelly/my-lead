@@ -1,13 +1,16 @@
-import { Bot, ClipboardList, Mail, MessageSquare, PhoneCall, Sparkles, Workflow, type LucideIcon } from 'lucide-react'
+import { Bot, BrainCircuit, ClipboardList, Mail, MessageSquare, PhoneCall, Sparkles, Workflow, type LucideIcon } from 'lucide-react'
 import { channelSoon, discounted, findPlan, money, percent, smsSoon, type Currency, type PublicPricing, type RateKey } from '../pricing'
 
-const RATES: { key: RateKey; icon: LucideIcon; label: string; unit: string }[] = [
+const RATES: { key: RateKey; icon: LucideIcon; label: string; unit: string; approx?: RateKey }[] = [
   { key: 'email', icon: Mail, label: 'Email', unit: 'per email' },
   { key: 'sms_transactional', icon: MessageSquare, label: 'SMS · transactional', unit: 'per message part' },
   { key: 'sms_promotional', icon: MessageSquare, label: 'SMS · promotional', unit: 'per message part' },
   { key: 'voice_minute', icon: PhoneCall, label: 'Voice call (recorded or text-to-speech)', unit: 'per started minute' },
   { key: 'voice_ai_minute', icon: Sparkles, label: 'AI calling agent', unit: 'per started minute' },
   { key: 'chat_reply', icon: Bot, label: 'AI chatbot', unit: 'per AI reply' },
+  // Metered: shown as the typical charge, with the minimum ("from") in the unit line.
+  { key: 'ai_assistant_message_typical', icon: BrainCircuit, label: 'AI Assistant', unit: 'per simple question, typically', approx: 'ai_assistant_message_from' },
+  { key: 'ai_agent_run_typical', icon: BrainCircuit, label: 'AI agent run', unit: 'per typical run', approx: 'ai_agent_run_from' },
 ]
 
 const FREE = [
@@ -37,7 +40,7 @@ export function RateCard({ data, currency }: { data: PublicPricing | undefined; 
           </tr>
         </thead>
         <tbody className="divide-y">
-          {rows.map(({ key, icon: Icon, label, unit }) => (
+          {rows.map(({ key, icon: Icon, label, unit, approx }) => (
             <tr key={key}>
               <th scope="row" className="px-4 py-4 text-left font-normal sm:px-8">
                 <span className="flex items-start gap-3">
@@ -48,13 +51,14 @@ export function RateCard({ data, currency }: { data: PublicPricing | undefined; 
                     <span className="block font-medium">{label}</span>
                     <span className="block text-xs text-muted-foreground">
                       {unit}
+                      {approx && data ? ` · metered, from ${money(data.rates[approx], currency)}` : ''}
                       {soon(key) && <span className="ml-1.5 rounded-full bg-muted px-2 py-0.5 font-medium">Calls to the UAE: coming soon</span>}
                     </span>
                   </span>
                 </span>
               </th>
-              <td className="px-3 py-4 tabular-nums sm:px-6">{data ? money(data.rates[key], currency) : wait}</td>
-              <td className="px-3 py-4 font-semibold tabular-nums text-primary sm:px-6">{data && pro ? money(discounted(data.rates[key], pro.usage_discount), currency) : wait}</td>
+              <td className="px-3 py-4 tabular-nums sm:px-6" data-testid={`rate-${key}`}>{data ? `${approx ? '≈ ' : ''}${money(data.rates[key], currency)}` : wait}</td>
+              <td className="px-3 py-4 font-semibold tabular-nums text-primary sm:px-6">{data && pro ? `${approx ? '≈ ' : ''}${money(discounted(data.rates[key], pro.usage_discount), currency)}` : wait}</td>
             </tr>
           ))}
           {sms && (

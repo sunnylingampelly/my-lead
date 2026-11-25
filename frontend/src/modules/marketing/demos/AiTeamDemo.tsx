@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { Bot, Check, Hash, ShieldCheck, Sparkles } from 'lucide-react'
+import { SlackLogo } from '@/components/SlackLogo'
 import { cn } from '@/lib/utils'
 import { DemoFrame } from './DemoFrame'
 import { progress, streamed, typed, useDemoClock } from './useDemoClock'
@@ -71,7 +72,7 @@ export function AiTeamDemo({ className }: { className?: string }) {
         <div className="flex min-h-[340px] flex-col">
           <div className="flex items-center gap-1.5 border-b border-white/[0.07] px-4 py-2.5 text-[12px] font-semibold">
             <Hash className="size-3.5 text-white/60" /> sales
-            <span className="ml-auto text-[10px] font-normal text-white/40">Slack channel</span>
+            <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] font-normal text-white/50"><SlackLogo className="size-3.5" /> Slack</span>
           </div>
           <div className="flex flex-1 flex-col justify-end gap-2 px-4 py-3 text-[12px] leading-snug">
             <AnimatePresence>

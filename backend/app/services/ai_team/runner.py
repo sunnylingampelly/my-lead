@@ -25,7 +25,7 @@ from app.core.permissions import Perm
 from app.models import Contact, CrmEvent, User
 from app.models.ai_team import AgentRun, AgentRunStep, AiAgent, AiPendingAction
 from app.services import audit_service
-from app.services.ai_team import actions, agents, llm, prompts, slack, tools, usage
+from app.services.ai_team import actions, agents, llm, metering, prompts, routing, slack, tools, usage
 from app.services.ai_team.registry import ToolError
 from app.services.ai_team.templates import TEMPLATES, simulated_plan
 from app.services.notification_service import notify
@@ -69,6 +69,8 @@ def create_run(db: Session, agent: AiAgent, key: str, data: dict, *, dry_run: bo
 def run_now(db: Session, ctx, agent_id: str, dry_run: bool) -> AgentRun:
     ctx.require(Perm.AI_MANAGE)
     agent = agents.get(db, ctx, agent_id)
+    if not dry_run:
+        metering.ensure_can_afford(db, ctx.organization_id)
     if not usage.try_consume(db, ctx.organization_id, usage.AGENT_RUNS):
         from app.core.errors import ValidationFailed
 
@@ -214,6 +216,7 @@ class _AppRef:
 class _Run:
     def __init__(self, db: Session, run: AgentRun):
         self.db, self.run, self.position, self.wrote = db, run, 0, False
+        self.call: dict = {}  # the model call the next steps came from: model, cached tokens and cost share
 
     def step(self, kind: str, *, tool: str | None = None, args: dict | None = None, summary: str | None = None,
              status: str = "done", action_id: str | None = None, tokens: tuple[int, int] = (0, 0)) -> AgentRunStep:
@@ -221,7 +224,8 @@ class _Run:
         s = AgentRunStep(organization_id=self.run.organization_id, application_id=self.run.application_id,
                          run_id=self.run.id, position=self.position, kind=kind, tool=tool, args=args,
                          result_summary=(summary or "")[:8000] or None, status=status, action_id=action_id,
-                         input_tokens=tokens[0], output_tokens=tokens[1])
+                         input_tokens=tokens[0], output_tokens=tokens[1], model=self.call.get("model"),
+                         cached_tokens=self.call.get("cached", 0), cost_usd=self.call.get("cost_usd", 0))
         self.db.add(s)
         self.db.flush()
         return s
@@ -264,7 +268,7 @@ def _call_tool(r: _Run, ctx, agent: AiAgent, call: llm.ToolCall, tokens: tuple[i
     db, run = r.db, r.run
     if call.invalid:
         r.step("tool", tool=call.name, summary="The model sent invalid arguments", status="failed", tokens=tokens)
-        return {"error": "Arguments must be a JSON object"}
+        return {"error": "Arguments must be a JSON object", "code": "INVALID_ARGUMENTS"}
     try:
         tool = tools.check(ctx, call.name, agent.allowed_tools)
         if tool.kind == "read":
@@ -295,7 +299,7 @@ def _call_tool(r: _Run, ctx, agent: AiAgent, call: llm.ToolCall, tokens: tuple[i
                 "action_id": a.id}
     except ToolError as exc:
         r.step("tool", tool=call.name, args=call.arguments, summary=exc.message, status="failed", tokens=tokens)
-        return {"error": exc.message}
+        return {"error": exc.message, "code": exc.code}
     except AppError as exc:
         r.step("tool", tool=call.name, args=call.arguments, summary=exc.message, status="failed", tokens=tokens)
         return {"error": exc.message}
@@ -384,6 +388,9 @@ def execute(db: Session, run: AgentRun) -> AgentRun:
     r.position = db.scalar(select(AgentRunStep.position).where(AgentRunStep.run_id == run.id)
                            .order_by(AgentRunStep.position.desc()).limit(1)) or 0
     started = _time.monotonic()
+    meter = metering.Meter()
+    if llm.configured() and not run.dry_run and not metering.can_afford(db, agent.organization_id):
+        return _pause_for_wallet(db, agent, run)
     try:
         ctx = _owner_ctx(db, agent)
         specs = tools.specs(ctx, agent.allowed_tools)
@@ -393,30 +400,54 @@ def execute(db: Session, run: AgentRun) -> AgentRun:
             lambda _t, h: h["plan"], {"plan": simulated_plan(db, agent, run.trigger_data or {}),
                                       "fallback": "Nothing to do for this trigger (simulation)."})
         text = ""
-        for _ in range(settings.AI_AGENT_MAX_STEPS):
+        retry_used = retry_next = False
+        final = (0, 0)
+        for round_idx in range(settings.AI_AGENT_MAX_STEPS):
             if _time.monotonic() - started > settings.AI_AGENT_RUN_TIMEOUT_SECONDS:
                 raise TimeoutError("The run took too long and was stopped")
-            turn = sim.turn(items) if sim else llm.complete(instructions, items, specs)
+            model = routing.agent_model(agent, round_idx, retry=retry_next)
+            retry_next = False
+            turn = sim.turn(items) if sim else llm.complete(instructions, items, specs, model=model)
             run.input_tokens += turn.input_tokens
             run.output_tokens += turn.output_tokens
+            c = meter.add(turn) or {}
             if not turn.tool_calls:
                 text = turn.text.strip()
+                r.call, final = dict(c), (turn.input_tokens, turn.output_tokens)
                 break
             items += turn.output_items
-            per = (turn.input_tokens // len(turn.tool_calls), turn.output_tokens // len(turn.tool_calls))
+            n = len(turn.tool_calls)
+            per = (turn.input_tokens // n, turn.output_tokens // n)
+            r.call = {"model": c.get("model"), "cached": c.get("cached", 0) // n, "cost_usd": c.get("cost_usd", 0) / n}
+            errors = []
             for call in turn.tool_calls:
                 res = _call_tool(r, ctx, agent, call, per)
+                if res.get("code"):
+                    errors.append(res["code"])
                 items.append({"type": "function_call_output", "call_id": call.call_id, "output": prompts.untrusted(res)})
+            r.call = {}
             db.commit()
+            if not sim and not retry_used and model == llm.fast_model() and routing.bad_output(turn, errors):
+                retry_used = retry_next = True
         else:
             text = text or "Stopped after the maximum number of steps."
         if sim:
-            text = f"_Simulated run (no OpenAI key)._\n\n{text}"
-        r.step("message", summary=text)
+            text = f"_Simulated run (no OpenAI key, no charge)._\n\n{text}"
+        r.step("message", summary=text, tokens=final)
+        r.call = {}
         pending = db.scalar(select(AiPendingAction.id).where(AiPendingAction.run_id == run.id,
                                                              AiPendingAction.status == "pending").limit(1))
         deliver(r, ctx, agent, text + ("\n\nSome actions are waiting for approval." if pending else ""))
         run.status, run.summary, run.error, run.finished_at = "completed", text[:20000], None, utcnow()
+        run.models = ",".join(meter.models)[:200] or None
+        run.cached_tokens, run.cost_usd = meter.cached_tokens, meter.cost_usd
+        if not run.dry_run:  # test runs are free
+            charged = metering.charge(db, agent.organization_id, agent.application_id, meter,
+                                      key=f"ai:run:{run.id}", description=f"AI agent: {agent.name}",
+                                      reference_type="ai_agent_run", reference_id=run.id,
+                                      meta={"agent_id": agent.id, "run_id": run.id})
+            if charged:
+                run.charge_amount, run.charge_currency = charged["amount"], charged["currency"]
     except Exception as exc:  # noqa: BLE001 - every failure is recorded on the run
         db.rollback()
         run = db.get(AgentRun, run.id)
@@ -436,6 +467,39 @@ def execute(db: Session, run: AgentRun) -> AgentRun:
                    link=f"/apps/{agent.application_id}/ai/agents/{agent.id}?run={run.id}", level="warning",
                    organization_id=agent.organization_id, application_id=agent.application_id)
     agent.last_run_at, agent.last_status = utcnow(), run.status
+    db.commit()
+    return run
+
+
+PAUSE_RETRY = timedelta(hours=1)
+PAUSE_GIVE_UP = timedelta(hours=24)
+
+
+def _pause_for_wallet(db: Session, agent: AiAgent, run: AgentRun) -> AgentRun:
+    """The wallet can't pay for AI: keep the run queued and try again hourly (for up to a day), and tell the
+    owners at most once a day."""
+    from app.models import OrganizationMember
+
+    now = utcnow()
+    if run.created_at < now - PAUSE_GIVE_UP:
+        run.status, run.finished_at = "skipped", now
+        run.error = "Skipped: the wallet had no credit for AI for a day"
+    else:
+        run.status, run.next_attempt_at = "queued", now + PAUSE_RETRY
+        run.attempts = max(run.attempts - 1, 0)  # waiting for credit isn't a failed attempt
+        run.error = "Paused: add credit to the wallet to resume AI agents"
+    if not agent.wallet_paused_notified_at or agent.wallet_paused_notified_at < now - timedelta(days=1):
+        agent.wallet_paused_notified_at = now
+        owners = set(db.scalars(select(OrganizationMember.user_id).where(
+            OrganizationMember.organization_id == agent.organization_id,
+            OrganizationMember.role_key.in_(("owner", "admin")))))
+        for uid in owners | ({agent.owner_id} if agent.owner_id else set()):
+            notify(db, uid, type_="ai_wallet_empty", level="warning",
+                   title=f"AI agent “{agent.name}” is paused"[:160],
+                   body="Your wallet doesn't have enough credit for AI. Add credit and the agent picks up where it "
+                        "left off.", link=f"/orgs/{agent.organization_id}/billing?topup=1",
+                   organization_id=agent.organization_id, application_id=agent.application_id)
+    agent.last_status = "paused"
     db.commit()
     return run
 
@@ -486,6 +550,10 @@ def run_out(r: AgentRun) -> dict:
     return {"id": r.id, "agent_id": r.agent_id, "status": r.status, "dry_run": r.dry_run, "simulated": r.simulated,
             "trigger_key": r.trigger_key, "trigger": r.trigger_data, "summary": r.summary, "error": r.error,
             "attempts": r.attempts, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+            "cached_tokens": r.cached_tokens, "models": (r.models or "").split(",") if r.models else [],
+            "cost_usd": float(r.cost_usd or 0),
+            "charge": ({"amount": float(r.charge_amount), "currency": r.charge_currency}
+                       if r.charge_amount is not None else None),
             "created_at": r.created_at.isoformat(), "started_at": r.started_at.isoformat() if r.started_at else None,
             "finished_at": r.finished_at.isoformat() if r.finished_at else None}
 
@@ -509,5 +577,6 @@ def run_detail(db: Session, ctx, run_id: str) -> dict:
         "tool_label": tools.REGISTRY[s.tool].label if s.tool in tools.REGISTRY else s.tool, "args": s.args,
         "summary": s.result_summary, "status": s.status, "action_id": s.action_id,
         "action_status": acts[s.action_id].status if s.action_id in acts else None,
-        "input_tokens": s.input_tokens, "output_tokens": s.output_tokens, "at": s.created_at.isoformat()}
+        "input_tokens": s.input_tokens, "output_tokens": s.output_tokens, "model": s.model,
+        "at": s.created_at.isoformat()}
         for s in steps]}

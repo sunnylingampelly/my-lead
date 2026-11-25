@@ -19,8 +19,8 @@ from app.services.billing import wallet as wl
 from app.utils.time import utcnow
 
 log = get_logger(__name__)
-LIMITS = {"INR": (Decimal("100"), Decimal("500000")), "USD": (Decimal("5"), Decimal("10000")),
-          "AED": (Decimal("20"), Decimal("37000"))}
+LIMITS = {cur: (Decimal(str(settings.TOPUP_MIN[cur])), Decimal(str(settings.TOPUP_MAX[cur])))
+          for cur in ("INR", "USD", "AED")}
 
 
 def provider_for(currency: str) -> str | None:
@@ -56,7 +56,9 @@ def create_checkout(db: Session, ctx, amount: Decimal) -> Payment:
                                "Contact support to add credit.", code="PAYMENTS_NOT_CONFIGURED")
     lo, hi = LIMITS[w.currency]
     if not lo <= amount <= hi:
-        raise ValidationFailed(f"Add between {w.currency} {lo:,.0f} and {w.currency} {hi:,.0f}", code="INVALID_AMOUNT")
+        raise ValidationFailed(f"The minimum top-up is {w.currency} {lo:,.0f} (and the most per payment is "
+                               f"{w.currency} {hi:,.0f})", code="INVALID_AMOUNT",
+                               details={"min": float(lo), "max": float(hi)})
     org = db.get(Organization, ctx.organization_id)
     # Prices exclude GST: the customer pays amount + GST and the wallet is credited `amount`.
     tax, buyer = invoices.checkout_tax(db, org.id, w.currency, amount, ctx.user.email)

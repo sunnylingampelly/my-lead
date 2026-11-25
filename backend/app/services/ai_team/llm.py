@@ -40,7 +40,9 @@ class Turn:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     output_items: list[dict] = field(default_factory=list)  # replayed as input on the next request of the turn
-    input_tokens: int = 0
+    input_tokens: int = 0  # includes cached input tokens (OpenAI usage semantics)
+    cached_tokens: int = 0
+    model: str | None = None  # the model that produced this turn (None in simulation)
     output_tokens: int = 0
     simulated: bool = False
 
@@ -55,6 +57,16 @@ def configured() -> bool:
 
 def model_for(fast: bool = False) -> str:
     return (settings.OPENAI_MODEL_FAST or settings.OPENAI_MODEL) if fast else settings.OPENAI_MODEL
+
+
+def fast_model() -> str:
+    """The cheap default for ordinary turns and lookups (see routing.py)."""
+    return settings.OPENAI_MODEL_FAST or settings.OPENAI_MODEL
+
+
+def smart_model() -> str:
+    """The flagship, for building workflows/agents, long multi-step plans and retries after bad output."""
+    return settings.OPENAI_MODEL
 
 
 def function_tools(specs: list[dict]) -> list[dict]:
@@ -106,13 +118,16 @@ def _turn_from_response(resp: Any) -> Turn:
     usage = getattr(resp, "usage", None)
     if usage is not None:
         turn.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        details = getattr(usage, "input_tokens_details", None)
+        turn.cached_tokens = int((details.get("cached_tokens") if isinstance(details, dict)
+                                  else getattr(details, "cached_tokens", 0)) or 0) if details is not None else 0
         turn.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     return turn
 
 
 def _request(instructions: str, input_items: list[dict], tools: list[dict], fast: bool,
-             max_output_tokens: int) -> dict:
-    req: dict = {"model": model_for(fast), "instructions": instructions, "input": list(input_items),
+             max_output_tokens: int, model: str | None = None) -> dict:
+    req: dict = {"model": model or model_for(fast), "instructions": instructions, "input": list(input_items),
                  "max_output_tokens": max_output_tokens, "store": False,
                  "include": ["reasoning.encrypted_content"]}
     if tools:
@@ -122,19 +137,23 @@ def _request(instructions: str, input_items: list[dict], tools: list[dict], fast
 
 
 def complete(instructions: str, input_items: list[dict], tools: list[dict] | None = None, *, fast: bool = False,
-             max_output_tokens: int = MAX_OUTPUT_TOKENS) -> Turn:
+             max_output_tokens: int = MAX_OUTPUT_TOKENS, model: str | None = None) -> Turn:
     """One model request (no streaming)."""
+    req = _request(instructions, input_items, tools or [], fast, max_output_tokens, model)
     try:
-        resp = _client().responses.create(**_request(instructions, input_items, tools or [], fast, max_output_tokens))
+        resp = _client().responses.create(**req)
     except Exception as exc:  # noqa: BLE001 - network, auth and API errors all surface the same way
         log.warning("openai_request_failed", error=type(exc).__name__)
         raise LlmError("The AI service is unavailable right now. Please try again in a moment.") from exc
-    return _turn_from_response(resp)
+    turn = _turn_from_response(resp)
+    turn.model = req["model"]
+    return turn
 
 
-def structured(instructions: str, user_text: str, name: str, schema: dict, *, fast: bool = False) -> tuple[dict, Turn]:
+def structured(instructions: str, user_text: str, name: str, schema: dict, *, fast: bool = False,
+               model: str | None = None) -> tuple[dict, Turn]:
     """Ask for JSON matching `schema` (Structured Outputs: `text.format` = json_schema in the Responses API)."""
-    req = _request(instructions, [{"role": "user", "content": user_text}], [], fast, MAX_OUTPUT_TOKENS)
+    req = _request(instructions, [{"role": "user", "content": user_text}], [], fast, MAX_OUTPUT_TOKENS, model)
     req["text"] = {"format": {"type": "json_schema", "name": name, "schema": schema, "strict": False}}
     try:
         resp = _client().responses.create(**req)
@@ -142,6 +161,7 @@ def structured(instructions: str, user_text: str, name: str, schema: dict, *, fa
         log.warning("openai_request_failed", error=type(exc).__name__)
         raise LlmError("The AI service is unavailable right now. Please try again in a moment.") from exc
     turn = _turn_from_response(resp)
+    turn.model = req["model"]
     try:
         data = json.loads(turn.text or "{}")
     except ValueError as exc:
@@ -152,9 +172,9 @@ def structured(instructions: str, user_text: str, name: str, schema: dict, *, fa
 
 
 def stream(instructions: str, input_items: list[dict], tools: list[dict] | None = None, *,
-           max_output_tokens: int = MAX_OUTPUT_TOKENS) -> Iterator[tuple[str, Any]]:
+           max_output_tokens: int = MAX_OUTPUT_TOKENS, model: str | None = None) -> Iterator[tuple[str, Any]]:
     """Stream one model request: yields ("delta", text) while the answer is written, then ("turn", Turn)."""
-    req = _request(instructions, input_items, tools or [], False, max_output_tokens)
+    req = _request(instructions, input_items, tools or [], False, max_output_tokens, model)
     try:
         events = _client().responses.create(**req, stream=True)
         final = None
@@ -173,7 +193,9 @@ def stream(instructions: str, input_items: list[dict], tools: list[dict] | None 
         raise LlmError("The AI service is unavailable right now. Please try again in a moment.") from exc
     if final is None:
         raise LlmError("The AI service stopped before finishing. Please try again.")
-    yield "turn", _turn_from_response(final)
+    turn = _turn_from_response(final)
+    turn.model = req["model"]
+    yield "turn", turn
 
 
 # ------------------------------------------------------------------ simulation

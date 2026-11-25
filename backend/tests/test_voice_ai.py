@@ -234,8 +234,8 @@ def ai_campaign(a, transfer: str | None = None) -> dict:
     rd = a.get(f"{a.v}/campaigns/{camp['id']}/readiness").json()
     assert rd["ready"], rd
     # AI rate x 2 expected minutes per answered call.
-    assert rd["cost"]["ai"] and rd["cost"]["per_minute"] == 6.0 and rd["cost"]["minutes_per_call"] == 2
-    assert rd["cost"]["total"] == 3 * 2 * 6.0
+    assert rd["cost"]["ai"] and rd["cost"]["per_minute"] == 25.0 and rd["cost"]["minutes_per_call"] == 2
+    assert rd["cost"]["total"] == 3 * 2 * 25.0
     prev = a.get(f"{a.v}/campaigns/{camp['id']}/preview").json()
     assert prev["ai_agent"] and prev["steps"][0]["text"].startswith("Hi Asha, this is Maya calling from Acme Solar")
     return {"campaign": camp, "agent": ag}
@@ -254,7 +254,7 @@ def test_ai_campaign_in_simulation_records_transcripts_and_updates_the_crm(app_i
     assert asha["status"] == "completed" and asha["has_transcript"] and asha["ai_interest"] == "hot"
     assert asha["ai_summary"].startswith("Simulated summary") and asha["contact_name"] == "Asha"
     # Charged at the AI rate per started minute.
-    assert float(asha["cost"]) == asha["billable_minutes"] * 6.0 and asha["billable_minutes"] >= 1
+    assert float(asha["cost"]) == asha["billable_minutes"] * 25.0 and asha["billable_minutes"] >= 1
     detail = a.get(f"{a.v}/campaigns/{cid}/calls/{asha['id']}").json()
     roles = [t["role"] for t in detail["transcript"]]
     assert roles[0] == "assistant" and "user" in roles and detail["simulated"]

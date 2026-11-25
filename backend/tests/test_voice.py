@@ -167,7 +167,7 @@ def test_campaign_outcomes_retry_opt_out_and_cost(india):
     # Five recipients: answered, no answer (retry pending), busy (retry pending), voicemail, opted out.
     assert out["status"] == "sending" and out["recipient_count"] == 5 and out["provider"] == "simulation"
     assert (st["answered"], st["voicemail"], st["pending"], st["opted_out"]) == (2, 1, 2, 1)
-    assert st["billable_minutes"] == 3 and st["cost"] == pytest.approx(1.8)
+    assert st["billable_minutes"] == 3 and st["cost"] == pytest.approx(7.5)  # 3 min x INR 2.50
     files = [json.loads(f.read_text(encoding="utf-8")) for f in call_log_path().glob("*.json")]
     asha = next(f for f in files if f["to"] == "+919876543210")
     assert "Namaste Asha" in asha["script"][1]["text"] and asha["keypress_prompt"] == rules.DEFAULT_OPT_OUT_PROMPT
@@ -193,7 +193,7 @@ def test_campaign_outcomes_retry_opt_out_and_cost(india):
     assert opted["total"] == 1 and opted["items"][0]["to_phone"] == "+919876599999"
     assert a.patch(f"{a.v}/campaigns/{c['id']}", json={"name": "x"}).status_code == 409
     ov = a.get(f"{a.v}/overview").json()
-    assert ov["last_30_days"]["answered"] == 2 and ov["last_30_days"]["spend"] == {"INR": 1.8}
+    assert ov["last_30_days"]["answered"] == 2 and ov["last_30_days"]["spend"] == {"INR": 7.5}
 
 
 def test_calling_window_defers_until_open(india, monkeypatch):

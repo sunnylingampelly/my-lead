@@ -208,12 +208,22 @@ def draft_from_prompt(db: Session, ctx, prompt: str) -> dict:
         return cfg
     tools_ = [t for t in agent_tools() if all(ctx.has(p) for p in REGISTRY[t].perms)]
     catalog = "\n".join(f"- {t}: {REGISTRY[t].description}" for t in tools_)
-    data, _ = llm.structured(
+    from app.services.ai_team import metering
+
+    metering.ensure_can_afford(db, ctx.organization_id)
+    data, turn = llm.structured(
         "You configure AI agents for Signalcraft, a marketing and sales platform. From the person's description, "
         "choose a short name, clear step-by-step instructions, what starts the agent (an event or a schedule in "
         "the application's timezone) and the smallest set of tools it needs. Prefer mode 'approve' whenever the "
         f"agent changes data or drafts messages.\n\nEvents: {', '.join(EVENTS)}.\nTools:\n{catalog}",
-        prompt, "agent_config", DRAFT_SCHEMA)
+        prompt, "agent_config", DRAFT_SCHEMA, model=llm.smart_model())  # building an agent: the flagship
+    meter = metering.Meter()
+    meter.add(turn)
+    import uuid
+
+    metering.charge(db, ctx.organization_id, ctx.application_id, meter, key=f"ai:draft:{uuid.uuid4().hex}",
+                    description="AI Assistant: draft an agent", reference_type="ai_agent_draft",
+                    reference_id=ctx.user.id if ctx.user else "")
     trigger = ({"type": "schedule", "every": data.get("every") or "daily", "time": data.get("time") or "09:00",
                 "day": data.get("day") or 0, "hours": data.get("hours") or 24}
                if data.get("trigger_type") == "schedule" else

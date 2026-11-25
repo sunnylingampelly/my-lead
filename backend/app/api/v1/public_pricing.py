@@ -22,6 +22,10 @@ def public_pricing(response: Response, currency: Literal["INR", "AED", "USD"] = 
     rates = next(r for r in pricing(currency) if r["country"] == home)
     ai = settings.VOICE_AI_PRICING.get(home) or settings.VOICE_AI_PRICING["default"]
     rates["voice_ai_minute"] = float(wl.convert(ai["per_minute"], ai["currency"], currency))
+    # AI Team: metered from the wallet (about AI_MARKUP x the model cost), at least the minimum per message/run.
+    from app.services.ai_team.metering import typical
+
+    rates.update(typical(currency))
     response.headers["Cache-Control"] = "public, max-age=300"
     uae = home == "AE"
     return {
@@ -36,4 +40,5 @@ def public_pricing(response: Response, currency: Literal["INR", "AED", "USD"] = 
                      "voice": settings.VOICE_UAE_ENABLED if uae else True},
         "plans": [_plan_card(p, currency) for p in plans.PLANS.values()],
         "rates": rates,
+        "topup_min": float(settings.TOPUP_MIN[currency]),
     }
